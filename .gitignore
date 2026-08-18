@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+.venv/
+
+# Local secrets (use .env.example as template)
+.env
+
+# NOTE: evidence/ is intentionally tracked in git — do NOT add it here
+# 仅排除临时取证文件（_ 前缀），防止误提交
+evidence/_*
