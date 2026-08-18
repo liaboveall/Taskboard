@@ -33,6 +33,14 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 | 3 | {a:100} | {a:100,b:20,c:3,d:4} |
 | 4 | {} | 同上 |
 
+## API 端点
+- `GET /api/tasks`：任务列表（ETag/304 + keyset 分页）
+- `POST /api/tasks/<id>/report`：步骤结果上报（幂等，409 步号不匹配）
+- `GET /healthz`：健康检查
+
+## 前端看板
+`static/index.html` 单文件看板，轮询 API 刷新任务状态。ETag/304 无变更不传 body，keyset 分页处理大数据集。
+
 ## 自己发现的边界情况
 - L3 `""` 保留当前粘性值，不回跳 base/L2；L2 `""` 是字面值。
 - `""` 作用于从未定义的 key → key 保持不存在。

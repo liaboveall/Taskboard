@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TASKBOARD · 调度看板</title>
+<style>
+  /* ---------- 主题变量：暗色运维控制台 ---------- */
+  :root {
+    --bg: #0b0f14;
+    --bg-panel: #10161f;
+    --bg-row-alt: #0d131c;
+    --line: #1d2735;
+    --line-strong: #2b3a50;
+    --ink: #c9d7e6;
+    --ink-dim: #6b7f96;
+    --ink-faint: #41506a;
+    --accent: #53e0b4;          /* 荧光绿：主强调色 */
+    --accent-dim: #1d5c4b;
+    --c-pending: #8a97a8;       /* 五种状态配色 */
+    --c-claimed: #5ec8f2;
+    --c-running: #ffc24b;
+    --c-done: #53e0b4;
+    --c-failed: #ff6b7a;
+    --mono: ui-monospace, "Cascadia Code", "JetBrains Mono", Consolas, "Courier New", monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(83,224,180,.06), transparent 60%),
+      repeating-linear-gradient(0deg, transparent 0 2px, rgba(255,255,255,.012) 2px 3px),
+      var(--bg);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 28px clamp(16px, 4vw, 56px) 60px;
+  }
+
+  /* ---------- 顶栏 ---------- */
+  header {
+    display: flex; align-items: baseline; gap: 18px; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line-strong);
+    padding-bottom: 14px; margin-bottom: 10px;
+  }
+  h1 {
+    font-size: 22px; letter-spacing: .22em; font-weight: 700; color: #fff;
+    text-shadow: 0 0 18px rgba(83,224,180,.35);
+  }
+  h1 .slash { color: var(--accent); }
+  .subtitle { color: var(--ink-dim); font-size: 12px; letter-spacing: .08em; }
+  .refresh {
+    margin-left: auto; display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--ink-dim); letter-spacing: .05em;
+  }
+  .dot {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 0 rgba(83,224,180,.55);
+    animation: pulse 2s infinite;
+  }
+  .dot.err { background: var(--c-failed); animation: none; }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(83,224,180,.55); }
+    70%  { box-shadow: 0 0 0 9px rgba(83,224,180,0); }
+    100% { box-shadow: 0 0 0 0 rgba(83,224,180,0); }
+  }
+
+  /* ---------- 汇总条 ---------- */
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; margin: 16px 0 20px; }
+  .stat {
+    border: 1px solid var(--line); background: var(--bg-panel);
+    padding: 8px 14px; min-width: 110px;
+    border-left: 3px solid var(--ink-faint);
+  }
+  .stat b { display: block; font-size: 22px; color: #fff; }
+  .stat span { font-size: 11px; color: var(--ink-dim); letter-spacing: .12em; }
+
+  /* ---------- 轮询错误面板（fetch 失败/5xx 时可见，不只是红点） ---------- */
+  #poll-error {
+    display: none; margin: 0 0 16px; padding: 12px 16px;
+    border: 1px solid var(--c-failed); border-left-width: 4px;
+    background: rgba(255,107,122,.07); font-size: 13px;
+    animation: slide-in .25s ease;
+  }
+  #poll-error .pe-title { color: var(--c-failed); font-weight: 700;
+                          letter-spacing: .08em; margin-bottom: 6px; }
+  #poll-error .pe-msg { color: var(--ink); word-break: break-all; }
+  #poll-error .pe-meta { color: var(--ink-dim); font-size: 12px; margin-top: 6px; }
+  #poll-error .pe-meta b { color: #fff; }
+
+  /* ---------- 陈旧数据横幅（连续失败时悬挂于表格上方） ---------- */
+  #stale-banner {
+    display: none; margin: 0 0 8px; padding: 6px 14px;
+    border: 1px dashed var(--c-running); color: var(--c-running);
+    background: rgba(255,194,75,.06); font-size: 12px; letter-spacing: .06em;
+  }
+
+  /* ---------- 结果面板（并发上报回显） ---------- */
+  #report-result { display: none; }
+  #report-result.show {
+    display: block; margin: 0 0 20px; padding: 12px 16px;
+    border: 1px dashed var(--accent); background: rgba(83,224,180,.06);
+    animation: slide-in .25s ease;
+  }
+  #report-result.show.fail { border-color: var(--c-failed); background: rgba(255,107,122,.06); }
+  @keyframes slide-in { from { opacity: 0; transform: translateY(-6px); } }
+  #report-result .rr-title { color: var(--accent); letter-spacing: .1em; margin-bottom: 4px; }
+  #report-result.show.fail .rr-title { color: var(--c-failed); }
+  #report-result .rr-nums { font-size: 13px; color: var(--ink); }
+  #report-result .rr-nums em { font-style: normal; color: #fff; font-weight: 700; }
+  #report-result .rr-note { font-size: 12px; color: var(--ink-dim); margin-top: 4px; }
+  #report-result .rr-lines { font-size: 12px; margin-top: 6px; color: var(--ink); }
+
+  /* ---------- 无 running 任务提示 ---------- */
+  #no-running {
+    display: none; margin: 0 0 18px; padding: 10px 14px;
+    border-left: 3px solid var(--c-running); color: var(--ink-dim);
+    background: var(--bg-panel); font-size: 13px;
+  }
+  #no-running code { color: var(--c-running); }
+
+  /* ---------- 任务表格 ---------- */
+  table { width: 100%; border-collapse: collapse; border: 1px solid var(--line-strong); }
+  thead th {
+    text-align: left; font-size: 11px; letter-spacing: .18em; color: var(--ink-dim);
+    background: var(--bg-panel); border-bottom: 1px solid var(--line-strong);
+    padding: 10px 14px; text-transform: uppercase;
+  }
+  tbody td { padding: 12px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tbody tr:nth-child(even) td { background: var(--bg-row-alt); }
+  tbody tr:hover td { background: #131c29; }
+  .tid { color: #fff; font-weight: 700; }
+  .dim { color: var(--ink-dim); }
+  .kv { font-size: 12px; color: var(--ink-dim); max-width: 200px; word-break: break-all; }
+  .kv i { font-style: normal; color: var(--ink); }
+
+  /* ---------- 状态徽章 ---------- */
+  .badge {
+    display: inline-block; padding: 2px 10px; font-size: 12px; font-weight: 700;
+    letter-spacing: .1em; border: 1px solid; border-radius: 2px;
+  }
+  .badge.pending { color: var(--c-pending); border-color: var(--c-pending); }
+  .badge.claimed { color: var(--c-claimed); border-color: var(--c-claimed);
+                   background: rgba(94,200,242,.08); }
+  .badge.running { color: var(--c-running); border-color: var(--c-running);
+                   background: rgba(255,194,75,.09); animation: glow 1.6s infinite alternate; }
+  .badge.done    { color: var(--c-done); border-color: var(--c-done);
+                   background: rgba(83,224,180,.08); }
+  .badge.failed  { color: var(--c-failed); border-color: var(--c-failed);
+                   background: rgba(255,107,122,.09); }
+  @keyframes glow { from { box-shadow: 0 0 2px rgba(255,194,75,.2); }
+                    to   { box-shadow: 0 0 10px rgba(255,194,75,.55); } }
+
+  /* ---------- steps 明细 ---------- */
+  .steps { list-style: none; display: flex; flex-direction: column; gap: 5px; }
+  .step {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 4px 10px; border: 1px solid var(--line); background: rgba(0,0,0,.18);
+    min-height: 34px;
+  }
+  .step.current { border-color: var(--c-running); box-shadow: inset 3px 0 0 var(--c-running); }
+  .step .no { color: var(--ink-faint); font-size: 12px; min-width: 34px; }
+  .step .ov { font-size: 12px; color: var(--ink-dim); word-break: break-all; }
+  .step .ov.none { color: var(--ink-faint); font-style: italic; }
+  .log-ok   { color: var(--c-done); font-size: 12px; }
+  .log-bad  { color: var(--c-failed); font-size: 12px; }
+  .log-none { color: var(--ink-faint); font-size: 12px; }
+  .log-meta { color: var(--ink-faint); font-size: 11px; }
+
+  /* ---------- 并发上报按钮 ---------- */
+  .btn-report {
+    font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: .06em;
+    color: #062018; background: var(--accent); border: none; padding: 5px 12px;
+    cursor: pointer; border-radius: 2px; margin-left: auto;
+    box-shadow: 0 0 12px rgba(83,224,180,.35);
+    transition: transform .12s ease, box-shadow .12s ease, background .12s;
+  }
+  .btn-report:hover { transform: translateY(-1px); box-shadow: 0 0 18px rgba(83,224,180,.6); }
+  .btn-report:disabled { background: var(--accent-dim); color: var(--ink-dim);
+                         cursor: wait; box-shadow: none; transform: none; }
+  /* 幂等重演：次级样式弱化（描边幽灵按钮，不发光不悬浮位移） */
+  .btn-report.secondary {
+    background: transparent; color: var(--accent);
+    border: 1px dashed var(--accent-dim); box-shadow: none;
+  }
+  .btn-report.secondary:hover { transform: none; box-shadow: none;
+                                border-color: var(--accent); }
+  .btn-report.secondary:disabled { color: var(--ink-dim);
+                                   border-color: var(--line); background: transparent; }
+
+  .empty-row td { text-align: center; color: var(--ink-dim); padding: 30px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>TASK<span class="slash">/</span>BOARD</h1>
+  <div class="subtitle">任务调度看板 · FOR UPDATE SKIP LOCKED + first-report-wins</div>
+  <div class="refresh">
+    <span class="dot" id="refresh-dot"></span>
+    <span>自动刷新 <span id="refresh-interval">2s</span> · 上次 <span id="last-fetch">—</span></span>
+  </div>
+</header>
+
+<div class="stats" id="stats"></div>
+
+<div id="poll-error"></div>
+<div id="stale-banner"></div>
+<div id="report-result"></div>
+<div id="no-running"></div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:70px">ID</th>
+      <th style="width:120px">状态</th>
+      <th style="width:120px">claimed_by</th>
+      <th style="width:90px">current_step</th>
+      <th>steps 明细</th>
+      <th style="width:110px">base_params</th>
+      <th style="width:80px">日志数</th>
+    </tr>
+  </thead>
+  <tbody id="tbody">
+    <tr class="empty-row"><td colspan="7">加载中…</td></tr>
+  </tbody>
+</table>
+
+<script>
+"use strict";
+
+const $tbody   = document.getElementById("tbody");
+const $stats   = document.getElementById("stats");
+const $dot     = document.getElementById("refresh-dot");
+const $last    = document.getElementById("last-fetch");
+const $result  = document.getElementById("report-result");
+const $noRun   = document.getElementById("no-running");
+const $pollErr = document.getElementById("poll-error");
+const $stale   = document.getElementById("stale-banner");
+const $interval = document.getElementById("refresh-interval");
+
+let tasks = [];
+let reporting = new Set();   // 正在上报中的 "tid:seq"，防止重复点击
+
+/* ---------- 工具：HTML 转义 ---------- */
+function esc(s) {
+  return String(s).replace(/[&<>"']/g,
+    c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ---------- override 摘要：空对象显示 "—"，否则压缩 JSON ---------- */
+function overrideSummary(ov) {
+  if (!ov || Object.keys(ov).length === 0)
+    return '<span class="ov none">— 无覆盖，继承上级 —</span>';
+  const body = Object.entries(ov)
+    .map(([k, v]) => `${esc(k)}=${esc(JSON.stringify(v))}`).join(" ");
+  return `<span class="ov">override ${body}</span>`;
+}
+
+/* ---------- 日志状态单元格 ---------- */
+function logBadge(log) {
+  if (log == null) return '<span class="log-none">○ 未上报</span>';
+  const when = new Date(log.reported_at).toLocaleTimeString();
+  let icon, errHtml = "";
+  if (log.success) {
+    icon = '<span class="log-ok">✓ 成功</span>';
+  } else {
+    icon = '<span class="log-bad">✗ 失败</span>';
+    // error_message 可能为 null：为空时不渲染任何多余内容
+    if (log.error_message) {
+      const full = String(log.error_message);
+      const short = full.length > 40 ? full.slice(0, 40) + "…" : full;
+      errHtml = ` <span class="log-bad" title="${esc(full)}">[${esc(short)}]</span>`;
+    }
+  }
+  // channel 审计列（'worker'/'manual'，schema v2）：null 时不显示
+  const ch = log.channel ? ` · ${esc(log.channel)}` : "";
+  return `${icon}${errHtml} <span class="log-meta">${esc(log.worker_id || "?")} @ ${esc(when)}${ch}</span>`;
+}
+
+/* ---------- 渲染 ---------- */
+function render() {
+  // 顶部汇总
+  const count = s => tasks.filter(t => t.status === s).length;
+  $stats.innerHTML = ["pending", "claimed", "running", "done", "failed"]
+    .map(s => `<div class="stat" style="border-left-color:var(--c-${s})">
+                 <b>${count(s)}</b><span>${s.toUpperCase()}</span></div>`)
+    .join("") +
+    `<div class="stat" style="border-left-color:var(--accent)">
+       <b>${tasks.reduce((n, t) => n + t.log_count, 0)}</b><span>STEP LOGS</span></div>`;
+
+  // 无 running 任务时的演示提示
+  const hasRunning = tasks.some(t => t.status === "running");
+  $noRun.style.display = hasRunning ? "none" : "block";
+  $noRun.innerHTML = "⚠ 当前没有 <b>running</b> 任务，无法演示并发上报。" +
+    "请先播种（默认非破坏，仅空库时播种）：<code>python -m board.seed</code>，然后 " +
+    "<code>python -m board.worker --id W1</code>，让步骤执行期间任务处于 running 状态。" +
+    "如需重建演示环境：<code>python -m board.seed --reset</code>（破坏性，需确认）。";
+
+  // 任务表格
+  if (tasks.length === 0) {
+    $tbody.innerHTML = '<tr class="empty-row"><td colspan="7">暂无任务</td></tr>';
+    return;
+  }
+  $tbody.innerHTML = tasks.map(t => {
+    const stepsHtml = t.steps.map(s => {
+      // 按钮出现条件：任务 running 且该步即 current_step。
+      // 已有日志时不再隐藏，改为次级样式的幂等重演按钮（预期 inserted=0）。
+      const isCurrent = t.status === "running" && s.step_index === t.current_step;
+      const key = t.id + ":" + s.step_index;
+      const busy = reporting.has(key);
+      let btn = "";
+      if (isCurrent) {
+        if (s.log == null) {
+          btn = `<button class="btn-report" data-key="${esc(key)}" data-tid="${esc(t.id)}"
+                         data-seq="${esc(s.step_index)}" ${busy ? "disabled" : ""}>
+                   ${busy ? "上报中…" : "并发上报×5"}</button>`;
+        } else {
+          btn = `<button class="btn-report secondary" data-key="${esc(key)}" data-tid="${esc(t.id)}"
+                         data-seq="${esc(s.step_index)}" data-replay="1"
+                         title="该步骤已有日志，重演仅验证 first-report-wins 幂等（预期 inserted=0、duplicates_ignored=1）"
+                         ${busy ? "disabled" : ""}>
+                   ${busy ? "上报中…" : "重复上报（幂等重演）"}</button>`;
+        }
+      }
+      return `<li class="step ${isCurrent ? "current" : ""}">
+                <span class="no">#${esc(s.step_index)}</span>
+                ${overrideSummary(s.override_params)}
+                ${logBadge(s.log)}
+                ${btn}</li>`;
+    }).join("");
+    const base = Object.entries(t.base_params)
+      .map(([k, v]) => `${esc(k)}=<i>${esc(JSON.stringify(v))}</i>`).join(" ") || "—";
+    return `<tr>
+      <td class="tid">#${esc(t.id)}</td>
+      <td><span class="badge ${esc(t.status)}">${esc(t.status)}</span></td>
+      <td class="dim">${t.claimed_by ? esc(t.claimed_by) : "—"}</td>
+      <td class="dim">#${esc(t.current_step)}</td>
+      <td><ul class="steps">${stepsHtml}</ul></td>
+      <td class="kv">${base}</td>
+      <td class="dim">${esc(t.log_count)} / ${esc(t.steps.length)}</td>
+    </tr>`;
+  }).join("");
+}
+
+/* ---------- 轮询错误面板 / 陈旧横幅 ---------- */
+let lastSuccessAt = null;      // Date：最后一次成功拉取（200/304 均算）
+let consecutiveFails = 0;      // 连续失败次数（成功后复位）
+let nextRetryAt = null;        // Date：下次重试时刻（退避倒计时基准）
+let lastFailReason = "";       // 最近一次失败原因（展示用）
+
+function showPollError(errMsg) {
+  $pollErr.style.display = "block";
+  $pollErr.innerHTML =
+    `<div class="pe-title">⚠ 轮询失败 —— 看板数据可能已陈旧</div>
+     <div class="pe-msg">${esc(errMsg)}</div>
+     <div class="pe-meta">最后成功拉取：<b>${lastSuccessAt ? esc(lastSuccessAt.toLocaleTimeString()) : "从未成功"}</b>
+       · 连续失败 <b>${esc(consecutiveFails)}</b> 次
+       · 下次重试：<b>${nextRetryAt ? "倒计时 <span id='retry-countdown'>…</span>" : "—"}</b></div>`;
+  $stale.style.display = "block";
+  $stale.textContent =
+    "⚠ 数据可能陈旧 —— 自动轮询受阻，正在指数退避重试（2s→4s→8s→16s，封顶 30s），下方数据截至最后成功时刻";
+}
+
+function hidePollError() {
+  $pollErr.style.display = "none";
+  $stale.style.display = "none";
+}
+
+// 1s 节拍：仅刷新错误面板里的重试倒计时（不触发网络请求）
+setInterval(() => {
+  const el = document.getElementById("retry-countdown");
+  if (!el) return;
+  if (!nextRetryAt) { el.textContent = "—"; return; }
+  const remain = Math.max(0, Math.ceil((nextRetryAt.getTime() - Date.now()) / 1000));
+  el.textContent = remain + "s";
+}, 1000);
+
+/* ---------- 指数退避轮询 ---------- */
+const BASE_INTERVAL = 2000;    // 基础 2s
+const MAX_INTERVAL = 30000;    // 封顶 30s（2→4→8→16→30…）
+let currentInterval = BASE_INTERVAL;
+let timerId = null;
+let fetching = false;   // in-flight 守卫：上一次请求未返回时跳过本次轮询（防叠加）
+
+function scheduleNext(ms) {
+  currentInterval = ms;
+  $interval.textContent = (ms / 1000) + "s";
+  if (timerId !== null) { clearInterval(timerId); timerId = null; }
+  // 页面隐藏时不挂定时器（visibilitychange 恢复时立即拉取）
+  if (!document.hidden) timerId = setInterval(fetchTasks, ms);
+}
+
+/* ---------- ETag / 304 感知 ---------- */
+// 保存上次响应的 ETag，下次请求手动携带 If-None-Match（不依赖浏览器缓存语义）。
+// 命中 304 时跳过 render（沿用当前 tasks），但刷新"最后成功时间"。
+let lastEtag = null;
+
+/* ---------- 拉取任务列表（含退避、304、摘要去重渲染） ---------- */
+async function fetchTasks() {
+  if (fetching) return;
+  fetching = true;
+  try {
+    const headers = { "Cache-Control": "no-cache" };
+    if (lastEtag) headers["If-None-Match"] = lastEtag;
+    const res = await fetch("/api/tasks", { cache: "no-store", headers });
+
+    if (res.status === 304) {
+      // 内容未变：跳过 render，保持 reporting 等交互状态；仍算成功轮询
+      lastSuccessAt = new Date();
+      consecutiveFails = 0;
+      nextRetryAt = null;
+      $dot.classList.remove("err");
+      $last.textContent = lastSuccessAt.toLocaleTimeString() + " (304)";
+      hidePollError();
+      scheduleNext(BASE_INTERVAL);
+      return;
+    }
+    if (!res.ok) throw new Error("HTTP " + res.status);
+
+    const text = await res.text();
+    let parsed;
+    try { parsed = JSON.parse(text); }
+    catch (_) { throw new Error("响应不是合法 JSON"); }
+
+    const etag = res.headers.get("ETag");
+    if (etag) lastEtag = etag;
+
+    // 渲染优化：JSON 摘要（字符串）比对，内容无变化时跳过 innerHTML 重建，
+    // reporting Set / 按钮禁用等交互状态自然不受影响。
+    if (text !== lastPayloadText) {
+      lastPayloadText = text;
+      tasks = parsed;
+      render();
+    }
+
+    lastSuccessAt = new Date();
+    consecutiveFails = 0;
+    nextRetryAt = null;
+    $dot.classList.remove("err");
+    $last.textContent = lastSuccessAt.toLocaleTimeString();
+    hidePollError();
+    scheduleNext(BASE_INTERVAL);   // 成功：立即复位 2s
+  } catch (e) {
+    consecutiveFails += 1;
+    lastFailReason = String(e && e.message ? e.message : e);
+    // 失败翻倍：2→4→8→16，封顶 30s
+    currentInterval = Math.min(Math.max(currentInterval * 2, BASE_INTERVAL * 2), MAX_INTERVAL);
+    nextRetryAt = new Date(Date.now() + currentInterval);
+    $dot.classList.add("err");
+    console.error("fetch /api/tasks failed:", e);
+    showPollError(lastFailReason);
+    scheduleNext(currentInterval);
+  } finally {
+    fetching = false;
+  }
+}
+let lastPayloadText = null;
+
+/* ---------- 页面可见性：隐藏暂停轮询，可见立即拉一次并恢复定时器 ---------- */
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) {
+    if (timerId !== null) { clearInterval(timerId); timerId = null; }
+    return;
+  }
+  fetchTasks();                    // 内部按成败重新 scheduleNext（成功复位 2s）
+});
+
+/* ---------- 上报 payload：附带快照围栏（expected_owner / expected_epoch） ---------- */
+function buildReportPayload(t) {
+  const payload = { success: true };
+  // 加法式持有者校验 + 围栏 token：附带看板当前快照的 claimed_by 与 claim_epoch，
+  // 后端与 FOR UPDATE 读到的实际持有者/围栏比对——页面陈旧（任务已换主/被 reaper
+  // 回收后重认领）时后端 409 拒绝，避免把误报写进新主的日志。
+  // 口径：任务无主（claimed_by=null）时两字段均不附带；
+  //       claimed_by 非 null 时 expected_owner 必附、expected_epoch 仅在
+  //       claim_epoch 为整数时附带（与后端"给了才校验"一致）。
+  if (t && t.claimed_by != null) {
+    payload.expected_owner = t.claimed_by;
+    if (Number.isInteger(t.claim_epoch)) payload.expected_epoch = t.claim_epoch;
+  }
+  return payload;
+}
+
+/* ---------- error_code 分类渲染：后端 error 文案 + 回带字段 ---------- */
+function describeApiError(body, status) {
+  const err  = body && body.error ? String(body.error) : "(无 error 响应体)";
+  const code = body && body.error_code ? String(body.error_code) : "unknown";
+  let base = "";
+  switch (code) {
+    case "task_terminal":
+      base = "任务已处于终态（done/failed/pending），手动上报仅接受 claimed/running。";
+      break;
+    case "step_not_current":
+      base = "该步骤不是任务当前执行步骤" +
+        (body && body.current_step != null
+          ? `（后端当前 current_step=#${esc(body.current_step)}）` : "") +
+        "，抢跑/迟到的上报被序号门拒绝。";
+      break;
+    case "owner_mismatch":
+      base = "持有者校验不匹配：任务实际持有者" +
+        (body && body.claimed_by != null ? ` '${esc(body.claimed_by)}'` : "已变化") +
+        "，页面数据陈旧，请等待自动刷新后重试。";
+      break;
+    case "epoch_mismatch":
+      base = "围栏（claim_epoch）不匹配：任务已被回收后重新认领" +
+        (body && body.claim_epoch != null
+          ? `（后端 claim_epoch=${esc(body.claim_epoch)}）` : "") +
+        "，本次上报被围栏拦截。";
+      break;
+    case "rate_limited":
+      base = "触发上报限流（滑动窗口 60s 上限），请稍后再试。";
+      break;
+    case "payload_too_large":
+      base = "请求体超过 64KB 上限。";
+      break;
+    case "expected_owner_required":
+      base = "有主任务必须携带 expected_owner" +
+        (body && body.claimed_by != null
+          ? `（当前持有者 '${esc(body.claimed_by)}'）` : "") + "。";
+      break;
+    case "expected_owner_invalid":
+      base = "expected_owner 必须为字符串。";
+      break;
+    case "task_not_found":
+      base = "任务不存在。";
+      break;
+    case "step_not_found":
+      base = "该任务的步骤不存在。";
+      break;
+    case "bad_body":
+      base = "请求体必须是 JSON 对象。";
+      break;
+    case "invalid_field":
+      base = "字段校验失败（success 必须为布尔等）。";
+      break;
+    case "internal_error":
+      base = "服务端内部错误。";
+      break;
+    default:
+      base = "未分类错误。";
+  }
+  return `<span class="log-bad">[HTTP ${esc(status)} · ${esc(code)}]</span> ${esc(err)}<br>` +
+         `<span class="dim">↳ ${base}</span>`;
+}
+
+/* ---------- 并发上报：Promise.all 同时发 5 个 POST ---------- */
+async function concurrentReport(tid, seq) {
+  const key = tid + ":" + seq;
+  reporting.add(key);
+  render();
+  try {
+    // 围栏 payload 从当前 tasks 快照读取（见 buildReportPayload）
+    const t = tasks.find(x => x.id === tid);
+    const payload = buildReportPayload(t);
+    // 并发语义由前端承担：5 个并行 POST，服务端每次只执行 1 次真实上报
+    const posts = Array.from({ length: 5 }, () =>
+      fetch(`/api/tasks/${encodeURIComponent(tid)}/steps/${encodeURIComponent(seq)}/report`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }).then(async r => {
+        let body = null;
+        try { body = await r.json(); } catch (_) { /* 非 JSON 响应体 */ }
+        return { status: r.status, ok: r.ok, body };
+      }).catch(e => ({ status: 0, ok: false, body: null, networkError: String(e) })));
+    const results = await Promise.all(posts);
+
+    // 汇总口径：5 次响应求和（每个成功响应 received=1，求和应为 5）
+    const sum = f => results.reduce((n, r) =>
+      n + ((r.body && typeof r.body[f] === "number") ? r.body[f] : 0), 0);
+    const received = sum("received"), inserted = sum("inserted"), ignored = sum("duplicates_ignored");
+    const failures = results.filter(r => !r.ok);
+
+    // 收紧判定：5 个响应全部收到、至多写入 1 行、inserted+ignored 恰好对平 received。
+    // 任何 HTTP/网络失败都会使 received<5，直接落入异常面板。
+    const ok = received === 5 && inserted <= 1 && inserted + ignored === received;
+
+    if (ok) {
+      const conflict = results.find(r => r.body && r.body.conflict_note);
+      $result.className = "show";
+      $result.innerHTML =
+        `<div class="rr-title">✔ 幂等验证通过</div>
+         <div class="rr-nums">任务 #${esc(tid)} step #${esc(seq)} · 口径：5 个并行 POST、每个 POST 1 次真实上报：
+           received=<em>${esc(received)}</em>（应为 5）  inserted=<em>${esc(inserted)}</em>
+           duplicates_ignored=<em>${esc(ignored)}</em></div>
+         <div class="rr-note">该 step 日志在 step_logs 中恰好 ${esc(inserted)} 行 —— 列表已立即刷新，可核对该步日志状态。${
+           conflict ? "（" + esc(conflict.body.conflict_note) + "）" : ""}</div>`;
+      return;
+    }
+
+    // 异常面板：列出实际数字 + 逐条异常响应（含 error_code 分类说明）
+    const lines = failures.map(r => {
+      if (r.networkError)
+        return `✘ 网络失败: ${esc(r.networkError)}`;
+      return `✘ ${describeApiError(r.body, r.status)}`;
+    }).join("<br>");
+    $result.className = "show fail";
+    $result.innerHTML =
+      `<div class="rr-title">✘ 幂等验证异常：${esc(failures.length)}/5 个 POST 未达预期</div>
+       <div class="rr-nums">任务 #${esc(tid)} step #${esc(seq)} ·
+         received=<em>${esc(received)}</em>（应为 5）  inserted=<em>${esc(inserted)}</em>（应 ≤1）
+         duplicates_ignored=<em>${esc(ignored)}</em> · 判定式：received===5 &amp;&amp; inserted&lt;=1
+         &amp;&amp; inserted+ignored===received</div>
+       ${lines ? `<div class="rr-lines">${lines}</div>` : ""}
+       <div class="rr-note">常见原因：任务/步骤不存在（404）、任务状态非 claimed/running（409 task_terminal）、
+         序号非当前步（409 step_not_current）、持有者/围栏不匹配（409 owner_mismatch / epoch_mismatch，
+         页面数据已陈旧，请等待自动刷新后重试）、限流（429）。异常时不计入“幂等验证通过”。</div>`;
+  } catch (e) {
+    $result.className = "show fail";
+    $result.innerHTML = `<div class="rr-title">✘ 请求失败</div>
+      <div class="rr-note">${esc(String(e))}</div>`;
+  } finally {
+    reporting.delete(key);
+    // 无条件重渲一次：下方 fetchTasks 在 payload 未变（如全 409 被拒、
+    // 看板数据无变化）时会命中摘要去重/304 而跳过 render，按钮会卡在
+    // “上报中…”禁用态；先 render 确保 reporting 状态即时复位到 UI。
+    render();
+    await fetchTasks();   // 立即刷新，证明该 step 只有一条日志
+  }
+}
+
+/* ---------- 事件委托：按钮点击 ---------- */
+$tbody.addEventListener("click", e => {
+  const btn = e.target.closest(".btn-report");
+  if (!btn || btn.disabled) return;
+  concurrentReport(Number(btn.dataset.tid), Number(btn.dataset.seq));
+});
+
+/* ---------- 轮询启动 ---------- */
+fetchTasks();
+scheduleNext(BASE_INTERVAL);
+</script>
+</body>
+</html>
