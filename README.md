@@ -12,7 +12,16 @@
 python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt
 createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 .venv\Scripts\python.exe -m board.seed            # 空库播种；--reset 破坏性重建
+.venv\Scripts\python.exe -m board.worker --id W1  # 第二终端起 --id W2
+.venv\Scripts\python.exe -m board.api             # 打开 http://localhost:5000
 ```
+
+## 架构简述
+- 参数合并：L1 base / L2 group / L3 step 三层粘性折叠，L3 `""` 为"不覆盖"哨兵。
+- 并发认领：单条原子 UPDATE + FOR UPDATE SKIP LOCKED。
+- 幂等：step_logs 主键 (task_id, step_index) + ON CONFLICT DO NOTHING，first-report-wins。
+- 任务状态唯一写者是 worker；手动上报只写 step_logs 并带状态门。
+- 租约回收：超期任务由 reclaim_expired 回收重跑，状态流转与日志写入带 owner/epoch 围栏。
 
 ## 参数"当前生效值"的演变（test_params.py 逐 Step 断言证明）
 起点 = base ⊕ L2；之后逐 Step 粘性推进，L3 `""` 保留当前值、不回跳 base。例：base={a:1,b:2,c:3}，L2={a:10,d:4}：

@@ -1,4 +1,4 @@
--- schema.sql —— 任务调度系统核心表结构
+-- schema.sql —— 任务调度系统核心表结构（schema 版本 2）
 
 -- 任务组：L2 参数覆盖存放在 override_params
 CREATE TABLE IF NOT EXISTS task_groups (
@@ -48,6 +48,11 @@ CREATE TABLE IF NOT EXISTS step_logs (
 
 -- 认领热路径部分索引：只索引 pending 行，认领按 id 升序取首行
 CREATE INDEX IF NOT EXISTS idx_tasks_pending ON tasks(id) WHERE status='pending';
+-- reaper 扫描部分索引（函数式索引）：
+-- COALESCE 让 claimed_at IS NULL 的脏行也进入索引，reclaim_expired 不漏扫
+CREATE INDEX IF NOT EXISTS idx_tasks_lease
+    ON tasks ((COALESCE(claimed_at, '-infinity'::timestamptz)))
+    WHERE status IN ('claimed','running');
 
 -- schema 版本登记表
 CREATE TABLE IF NOT EXISTS schema_meta (
