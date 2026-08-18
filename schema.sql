@@ -46,6 +46,9 @@ CREATE TABLE IF NOT EXISTS step_logs (
     PRIMARY KEY (task_id, step_index)
 );
 
+-- 认领热路径部分索引：只索引 pending 行，认领按 id 升序取首行
+CREATE INDEX IF NOT EXISTS idx_tasks_pending ON tasks(id) WHERE status='pending';
+
 -- schema 版本登记表
 CREATE TABLE IF NOT EXISTS schema_meta (
     version    int PRIMARY KEY,
