@@ -1,11 +1,8 @@
-# Taskboard
+# 任务调度看板（kGroup 实习生笔试题·题目一）
 
-基于 Flask + PostgreSQL 的任务调度看板。
+Python（Flask + psycopg 3）+ PostgreSQL：三层参数合并、并发认领、幂等 step 日志、单文件状态看板。并发正确性靠 PostgreSQL 行锁与唯一约束，无外部中间件。
 
-## 技术栈
-- Python 3.12
-- Flask
-- psycopg 3 + PostgreSQL 17
+**语言选择**：Python，团队最熟。并发正确性全部下沉到数据库行锁与唯一约束，应用层不持有分布式状态；本规模（≤10 worker、≤5 TPS）用不上 MQ/Redis。
 
 ## 快速开始（Python 3.12，需本机 PostgreSQL）
 ```bash
@@ -33,13 +30,8 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 | 3 | {a:100} | {a:100,b:20,c:3,d:4} |
 | 4 | {} | 同上 |
 
-## API 端点
-- `GET /api/tasks`：任务列表（ETag/304 + keyset 分页）
-- `POST /api/tasks/<id>/report`：步骤结果上报（幂等，409 步号不匹配）
-- `GET /healthz`：健康检查
-
-## 前端看板
-`static/index.html` 单文件看板，轮询 API 刷新任务状态。ETag/304 无变更不传 body，keyset 分页处理大数据集。
+## 真实并发如何保证
+`tests/attack_claim.py`：spawn 起 10 个独立进程，每个进程在子进程内新建独立数据库连接（非线程/协程级伪并发），Barrier 对齐起跑。判定 = 队列回传 id 去重 + DB 计数核对 + 多 worker 参与度核对。10 进程 × 10 轮 × 100 任务，**duplicate_claims=0**。
 
 ## 自己发现的边界情况
 - L3 `""` 保留当前粘性值，不回跳 base/L2；L2 `""` 是字面值。
@@ -47,3 +39,12 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 - 假值（0/False/None）不是哨兵，仅精确 `""` 触发跳过。
 - 嵌套 dict override 整体替换、非深合并（刻意取舍，有测试锁定）。
 - step_index 可不连续，按真实序号上报。
+
+## 测试
+- pytest 102 用例全绿（params 25 / api 34 / recovery 21 / 其余 22）。
+- 多进程并发攻击测试 PASS（duplicate_claims=0）。
+- 看板 E2E 验证：并发 5 次上报全去重、竞速失败如实渲染。
+- 更多验证细节见 COLLAB.md。
+
+## 砍掉清单
+连接池、回收后断点续跑、嵌套深合并、WebSocket、鉴权、迁移框架——均为与本规模不匹配或刻意取舍，逐项理由见 COLLAB.md。
