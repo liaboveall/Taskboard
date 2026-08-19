@@ -1,0 +1,108 @@
+# compose.yaml —— taskboard 容器化一键栈（演示库口径）
+#
+# 服务拓扑：postgres → seed（一次性播种，退出） → api（healthz 探活）
+#           → worker（可 --scale 横向扩）；testrunner 挂 test profile 按需跑全量测试。
+#
+# 配置纪律：容器内环境变量统一由本文件注入（x-app-env 锚点单点收敛），
+# 绝不挂载/依赖宿主机 .env —— 宿主机 .env 指向本机 PG 17，与容器 PG 互不干扰。
+# postgres 刻意不开 ports 映射：只在 compose 内网暴露，避免与宿主机 PG 争端口。
+# watchdog 不进容器：它是裸机部署形态的进程守护，容器形态的生命周期管理
+# 由下方 restart 策略承担（边界说明见 README「部署形态取舍」）。
+
+name: taskboard
+
+# 应用服务的统一环境变量锚点：DATABASE_URL 与 postgres 服务的
+# POSTGRES_USER/PASSWORD/DB 逐项一致，改口径只改这一处 + postgres 定义。
+x-app-env: &app-env
+  DATABASE_URL: postgresql://taskboard:taskboard@postgres:5432/taskboard
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: taskboard
+      POSTGRES_PASSWORD: taskboard
+      POSTGRES_DB: taskboard
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U taskboard -d taskboard"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 3s
+
+  seed:
+    build: .
+    image: taskboard-app
+    # --force = --reset 的历史别名且跳过交互确认：容器无 tty，裸 --reset 会
+    # 卡在 input() 确认上（stdin 为 /dev/null 时直接 EOFError），必须用 --force。
+    # 语义：DROP 四表 → schema.sql → 播种 3 任务演示数据（幂等可重复 up）。
+    command: ["python", "-m", "board.seed", "--force"]
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build: .
+    image: taskboard-app
+    command: ["python", "-m", "board.api"]
+    environment:
+      <<: *app-env
+      # 容器内必须绑 0.0.0.0，宿主机端口映射才触达得到（见 board/api.py 注释）；
+      # 裸机默认仍 127.0.0.1，信任边界不变。端口只映射到 127.0.0.1，出机收口
+      # 靠 API_TOKEN + 反代（compose 默认不注入 API_TOKEN，即容器演示无认证）。
+      API_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:5000:5000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    # 镜像内无 curl 也不装：用自带的 python urllib 打 /healthz
+    # （urlopen 非 2xx 抛 HTTPError → 非零退出码）
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request as u; u.urlopen('http://127.0.0.1:5000/healthz', timeout=3)\""]
+      interval: 5s
+      timeout: 4s
+      retries: 24
+      start_period: 5s
+    restart: unless-stopped
+
+  worker:
+    build: .
+    image: taskboard-app
+    # worker id 从容器 HOSTNAME 派生（$$ 转义防 compose 插值，留给容器内 shell）：
+    # --scale worker=N 时每副本 HOSTNAME 唯一，避免同 id 多进程共享 claimed_by
+    # 造成围栏语义混乱；显式 WORKER_ID 环境变量可覆盖（单实例场景）。
+    command: ["sh", "-c", "exec python -m board.worker --id \"$${WORKER_ID:-$${HOSTNAME}}\""]
+    environment: *app-env
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # 容器内全量测试：docker compose --profile test run --rm testrunner
+  # -m "" 覆盖 pyproject addopts 的 slow 排除，attack_claim 攻击用例真跑；
+  # conftest 会连 maintenance 库自建 taskboard_test 隔离库（postgres 镜像
+  # 默认 superuser，CREATE DATABASE 无权限问题），演示库零写入。
+  # TB_STRICT_DB=1：隔离供给失败时大声 fail，不容忍"假绿"。
+  testrunner:
+    build: .
+    image: taskboard-app
+    profiles: ["test"]
+    command: ["python", "-m", "pytest", "tests", "-m", "", "--cov=board", "--cov-report=term-missing"]
+    environment:
+      <<: *app-env
+      TB_STRICT_DB: "1"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+volumes:
+  pgdata:

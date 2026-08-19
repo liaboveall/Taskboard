@@ -1,0 +1,19 @@
+# docker-compose.extend.yml —— devcontainer 专用覆盖层（只由 devcontainer CLI 加载）
+# 与 ../compose.yaml 叠加：补出专属 dev 服务（主 compose 刻意不设，
+# 裸 `docker compose up` 不起开发容器）。路径相对本文件所在目录。
+services:
+  dev:
+    build:
+      context: ..
+    image: taskboard-dev
+    command: ["sleep", "infinity"]   # devcontainer CLI 会覆写实际入口
+    working_dir: /workspaces/taskboard
+    environment:
+      DATABASE_URL: postgresql://taskboard:taskboard@postgres:5432/taskboard
+      API_HOST: 0.0.0.0
+    # 源码 bind mount：容器内改代码即宿主可见；镜像内已装的依赖不受挂载影响
+    volumes:
+      - ..:/workspaces/taskboard:cached
+    depends_on:
+      postgres:
+        condition: service_healthy

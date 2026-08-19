@@ -1,0 +1,27 @@
+{
+  // devcontainer.json —— 复用根目录 compose 栈的开发容器（薄层）
+  //
+  // dockerComposeFile 数组形态：先加载主 compose（postgres/seed/api/worker 全套
+  // 依赖随 dev 服务一起拉起），再叠加本目录 extend 文件补上专属 dev 服务——
+  // dev 服务刻意不写进主 compose.yaml：裸 `docker compose up` 的演示体验
+  // 不被 sleep infinity 的开发容器污染；devcontainer CLI 双文件加载不受影响。
+  "name": "taskboard",
+  "dockerComposeFile": ["../compose.yaml", "docker-compose.extend.yml"],
+  "service": "dev",
+  "workspaceFolder": "/workspaces/taskboard",
+
+  // 看板端口转发：api 由 compose 映射到宿主机 127.0.0.1:5000；
+  // 容器网络内也可直接用服务名访问 http://api:5000。
+  "forwardPorts": [5000],
+
+  // 运行镜像已含 dev 依赖（见 Dockerfile 头注释取舍）；此处做一次
+  // user 级补装兜底（已满足时秒过），并打印版本留痕。
+  "postCreateCommand": "pip install --user -r requirements-dev.txt; python -m pytest --version",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "charliermarsh.ruff"]
+    }
+  },
+  "remoteUser": "appuser"
+}

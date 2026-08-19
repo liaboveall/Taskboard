@@ -1,0 +1,21 @@
+# .dockerignore —— 构建上下文瘦身 + 防宿主机配置泄漏进镜像
+# 宿主机 .env 指向本机 PostgreSQL，容器栈一律用 compose 注入的环境变量，
+# .env 绝不能进镜像/进容器。
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.coverage
+coverage.xml
+evidence
+.env
+.env.example
+.devcontainer
+compose.yaml
+docker-compose*.yml
+Dockerfile
+.dockerignore
