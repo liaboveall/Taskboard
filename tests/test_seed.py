@@ -61,6 +61,13 @@ def _task_count(conn):
         return cur.fetchone()[0]
 
 
+def _release_locks(conn):
+    """提交关闭 fixture 连接的隐式事务：SELECT 会留下 ACCESS SHARE 锁，
+    seed.main() 另开连接执行 schema.sql DDL 需要 ACCESS EXCLUSIVE 锁，
+    不先释放会撞 lock_timeout 抛 LockNotAvailable（事务卫生口径）。"""
+    conn.commit()
+
+
 def _insert_sentinel(conn):
     """插入一个带标记的哨兵任务：用于构造非空库 / 验证 --force 重建后旧数据消失。"""
     with conn.cursor() as cur:
@@ -85,6 +92,9 @@ def _sentinel_count(conn):
 def test_seed_empty_db_seeds(clean_db, monkeypatch, capsys):
     """tasks 为空 → 默认路径执行 schema + 播种：打印 seeded 摘要，
     演示数据落库（1 group × 3 tasks × 3 steps）。"""
+    # fixture _wipe() 的 DELETE 事务已 commit，但显式收尾一次更稳：
+    # 确保无任何残留事务持锁，再让 seed.main() 开新连接跑 DDL
+    _release_locks(clean_db)
     monkeypatch.setattr(sys, "argv", ["board.seed"])
     seed.main()
     out = capsys.readouterr().out
@@ -98,6 +108,9 @@ def test_seed_nonempty_skips(clean_db, monkeypatch, capsys):
     """tasks 非空 → 默认非破坏路径：打印 skip 摘要，任务数纹丝不动。"""
     _insert_sentinel(clean_db)
     assert _task_count(clean_db) == 1
+    # 上面的 SELECT 在 fixture 连接上留了未提交事务（持 tasks ACCESS SHARE 锁），
+    # 先 commit 释放，否则 seed.main() 的 DDL 拿不到 ACCESS EXCLUSIVE 锁
+    _release_locks(clean_db)
 
     monkeypatch.setattr(sys, "argv", ["board.seed"])
     seed.main()
@@ -113,6 +126,9 @@ def test_seed_force_rebuilds(clean_db, monkeypatch, capsys):
     """--force：跳过交互确认，DROP 四表 → schema → 播种；
     存量数据（哨兵任务）消失，重新播种出 3 个演示任务。"""
     _insert_sentinel(clean_db)
+    # 同上：seed.main() 的 DROP TABLE 需要 ACCESS EXCLUSIVE 锁，
+    # 先关闭 fixture 连接的隐式事务，避免持锁撞 lock_timeout
+    _release_locks(clean_db)
 
     monkeypatch.setattr(sys, "argv", ["board.seed", "--force"])
     seed.main()
