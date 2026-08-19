@@ -38,13 +38,15 @@ import socket
 import subprocess
 import time
 
-from board import logconf
+from board import db, logconf
 
 logger = logconf.setup("watchdog")
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 PY = os.environ.get("WATCHDOG_PYTHON") or os.path.join(ROOT, ".venv", "Scripts", "python.exe")
-API_PORT = int(os.environ.get("PORT", "5000"))
+# PORT 容错口径：脏值（如 PORT=abc）不应把守护进程整体炸掉——db.env_int
+# 缺失/非法均回退默认 5000，仅非法值打 WARNING（与 api/worker 同一容错口径）。
+API_PORT = db.env_int("PORT", 5000)
 JOBS = [
     [PY, "-m", "board.api"],
     [PY, "-m", "board.worker", "--id", "W1"],
