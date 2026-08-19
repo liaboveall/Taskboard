@@ -475,7 +475,7 @@ def test_report_409_epoch_mismatch(client, conn, make_task):
     assert resp.status_code == 409
     body = resp.get_json()
     assert body["error_code"] == "epoch_mismatch"
-    assert body["claim_epoch"] == 7  # 回带实际 epoch
+    assert body["claim_epoch"] == "7"  # 回带实际 epoch（字符串化，防 2^53 丢精度）
 
 
 @needs_db
@@ -495,11 +495,42 @@ def test_report_expected_epoch_match_200(client, conn, make_task):
 
 @needs_db
 def test_report_400_expected_epoch_invalid_type(client, make_task):
-    # bool 不算整数；非整数一律 400 invalid_field
+    # bool 不算整数；非法类型一律 400 invalid_field
     tid = make_task(status="running", claimed_by="W-api")
     resp = client.post(
         f"/api/tasks/{tid}/steps/1/report",
         json={"success": True, "expected_owner": "W-api", "expected_epoch": True},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "invalid_field"
+
+
+# ---------- ⑯b expected_epoch 字符串化兼容：纯数字字符串匹配 / 非数字 400 ----------
+
+@needs_db
+def test_report_expected_epoch_string_match_200(client, conn, make_task):
+    # GET 已把 claim_epoch 字符串化，前端原样透传字符串形态的 expected_epoch：
+    # 服务端归一化 int 后与库值比对，匹配则正常写入
+    tid = make_task(status="running", claimed_by="W-epoch")
+    with conn.cursor() as cur:
+        cur.execute("UPDATE tasks SET claim_epoch = 7 WHERE id = %s", (tid,))
+    conn.commit()
+
+    resp = client.post(
+        f"/api/tasks/{tid}/steps/1/report",
+        json={"success": True, "expected_owner": "W-epoch", "expected_epoch": "7"},
+    )
+    assert resp.status_code == 200
+    assert resp.get_json()["inserted"] == 1
+
+
+@needs_db
+def test_report_400_expected_epoch_non_digit_string(client, make_task):
+    # 非纯十进制数字字符串（含负号/小数点/字母/空串）一律 400 invalid_field
+    tid = make_task(status="running", claimed_by="W-api")
+    resp = client.post(
+        f"/api/tasks/{tid}/steps/1/report",
+        json={"success": True, "expected_owner": "W-api", "expected_epoch": "7a"},
     )
     assert resp.status_code == 400
     assert resp.get_json()["error_code"] == "invalid_field"
@@ -627,7 +658,8 @@ def test_list_tasks_claim_epoch_and_channel_fields(client, conn, make_task):
     assert resp.status_code == 200
     mine = [t for t in resp.get_json() if t["id"] == tid]
     assert len(mine) == 1
-    assert mine[0]["claim_epoch"] == 3
+    # claim_epoch 字符串化输出：防 bigint 超 JS 2^53 安全整数边界
+    assert mine[0]["claim_epoch"] == "3"
     assert mine[0]["steps"][0]["log"]["channel"] == "worker"
 
 
@@ -645,6 +677,40 @@ def test_list_tasks_pagination_and_invalid_params(client, make_task):
     assert resp.status_code == 400
     assert resp.get_json()["error_code"] == "invalid_field"
     resp = client.get("/api/tasks?after_id=-")
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "invalid_field"
+
+
+# ---------- ㉒a API_TOKEN 可选认证：未设放行 / 缺 token 401 / 正确 token 通过 ----------
+# 钩子每请求读 os.environ，monkeypatch setenv 即时生效；沿用既有 client fixture，
+# autouse 的限流清账 fixture 同样覆盖本组用例。选不需 DB 的参数校验路径
+# （limit=abc → 400）断言“认证已通过”，避免无库环境 skip。
+
+def test_auth_401_when_token_required_but_missing(client, monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "secret-token")
+    resp = client.get("/api/tasks")
+    assert resp.status_code == 401
+    body = resp.get_json()
+    assert body["error_code"] == "unauthorized"
+    assert "error" in body
+
+
+def test_auth_pass_with_valid_bearer_token(client, monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "secret-token")
+    # 携带正确 token：请求通过认证门进入参数校验段（非法 limit → 400
+    # invalid_field 而非 401，证明未被认证拦截）
+    resp = client.get(
+        "/api/tasks?limit=abc",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "invalid_field"
+
+
+def test_auth_passthrough_when_token_unset(client, monkeypatch):
+    # API_TOKEN 未设置：行为不变，无 token 也直达参数校验段
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    resp = client.get("/api/tasks?limit=abc")
     assert resp.status_code == 400
     assert resp.get_json()["error_code"] == "invalid_field"
 

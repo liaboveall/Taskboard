@@ -54,6 +54,19 @@
     margin-left: auto; display: flex; align-items: center; gap: 8px;
     font-size: 12px; color: var(--ink-dim); letter-spacing: .05em;
   }
+
+  /* ---------- 可选 token 输入（API_TOKEN 开启时附带 Authorization 头） ---------- */
+  .token-box {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--ink-dim); letter-spacing: .12em;
+  }
+  .token-box input {
+    font-family: var(--mono); font-size: 12px; color: var(--ink);
+    background: var(--bg-panel); border: 1px solid var(--line);
+    padding: 3px 8px; width: 160px; border-radius: 2px; outline: none;
+  }
+  .token-box input:focus { border-color: var(--accent);
+                           box-shadow: 0 0 6px rgba(83,224,180,.3); }
   .dot {
     width: 9px; height: 9px; border-radius: 50%;
     background: var(--accent);
@@ -95,6 +108,14 @@
     display: none; margin: 0 0 8px; padding: 6px 14px;
     border: 1px dashed var(--c-running); color: var(--c-running);
     background: rgba(255,194,75,.06); font-size: 12px; letter-spacing: .06em;
+  }
+
+  /* ---------- 分页越页横幅（X-Has-More=true 时醒目提示） ---------- */
+  #overflow-banner {
+    display: none; margin: 0 0 8px; padding: 8px 14px;
+    border: 1px solid var(--c-running); border-left-width: 4px;
+    color: var(--c-running); background: rgba(255,194,75,.10);
+    font-size: 13px; font-weight: 700; letter-spacing: .04em;
   }
 
   /* ---------- 结果面板（并发上报回显） ---------- */
@@ -202,11 +223,16 @@
     <span class="dot" id="refresh-dot"></span>
     <span>自动刷新 <span id="refresh-interval">2s</span> · 上次 <span id="last-fetch">—</span></span>
   </div>
+  <div class="token-box">
+    <label for="api-token">TOKEN</label>
+    <input id="api-token" type="password" placeholder="可选（服务端开启认证时填）" autocomplete="off">
+  </div>
 </header>
 
 <div class="stats" id="stats"></div>
 
 <div id="poll-error"></div>
+<div id="overflow-banner"></div>
 <div id="stale-banner"></div>
 <div id="report-result"></div>
 <div id="no-running"></div>
@@ -238,8 +264,20 @@ const $last    = document.getElementById("last-fetch");
 const $result  = document.getElementById("report-result");
 const $noRun   = document.getElementById("no-running");
 const $pollErr = document.getElementById("poll-error");
+const $overflow = document.getElementById("overflow-banner");
 const $stale   = document.getElementById("stale-banner");
 const $interval = document.getElementById("refresh-interval");
+const $token    = document.getElementById("api-token");
+
+/* ---------- 可选 token：localStorage 持久化；非空时两处 fetch 附带
+   Authorization: Bearer 头（服务端 API_TOKEN 未开启时该头无害被忽略） ---------- */
+$token.value = localStorage.getItem("tb_api_token") || "";
+$token.addEventListener("input",
+  () => localStorage.setItem("tb_api_token", $token.value.trim()));
+function authHeaders() {
+  const tok = ($token.value || "").trim();
+  return tok ? { "Authorization": "Bearer " + tok } : {};
+}
 
 let tasks = [];
 let reporting = new Set();   // 正在上报中的 "tid:seq"，防止重复点击
@@ -403,7 +441,7 @@ async function fetchTasks() {
   if (fetching) return;
   fetching = true;
   try {
-    const headers = { "Cache-Control": "no-cache" };
+    const headers = { "Cache-Control": "no-cache", ...authHeaders() };
     if (lastEtag) headers["If-None-Match"] = lastEtag;
     const res = await fetch("/api/tasks", { cache: "no-store", headers });
 
@@ -427,6 +465,15 @@ async function fetchTasks() {
 
     const etag = res.headers.get("ETag");
     if (etag) lastEtag = etag;
+
+    // X-Has-More：总任务数超出单页上限时醒目横幅提示（N = 本页实际返回条数）
+    if (res.headers.get("X-Has-More") === "true") {
+      $overflow.style.display = "block";
+      $overflow.textContent =
+        `⚠ 任务数超出一页，看板仅显示前 ${parsed.length} 条`;
+    } else {
+      $overflow.style.display = "none";
+    }
 
     // 渲染优化：JSON 摘要（字符串）比对，内容无变化时跳过 innerHTML 重建，
     // reporting Set / 按钮禁用等交互状态自然不受影响。
@@ -476,10 +523,12 @@ function buildReportPayload(t) {
   // 回收后重认领）时后端 409 拒绝，避免把误报写进新主的日志。
   // 口径：任务无主（claimed_by=null）时两字段均不附带；
   //       claimed_by 非 null 时 expected_owner 必附、expected_epoch 仅在
-  //       claim_epoch 为整数时附带（与后端"给了才校验"一致）。
+  //       claim_epoch 为纯数字字符串形态时附带（后端 GET 已字符串化输出，
+  //       防 bigint 超 JS 2^53 安全整数边界；字符串原样透传，后端归一化
+  //       int 后比对，与后端“给了才校验”一致）。
   if (t && t.claimed_by != null) {
     payload.expected_owner = t.claimed_by;
-    if (Number.isInteger(t.claim_epoch)) payload.expected_epoch = t.claim_epoch;
+    if (/^\d+$/.test(String(t.claim_epoch))) payload.expected_epoch = t.claim_epoch;
   }
   return payload;
 }
@@ -559,7 +608,7 @@ async function concurrentReport(tid, seq) {
     const posts = Array.from({ length: 5 }, () =>
       fetch(`/api/tasks/${encodeURIComponent(tid)}/steps/${encodeURIComponent(seq)}/report`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(payload),
       }).then(async r => {
         let body = null;

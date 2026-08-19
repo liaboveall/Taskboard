@@ -46,5 +46,11 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 - 看板 E2E 验证：并发 5 次上报全去重、竞速失败如实渲染。
 - 更多验证细节见 COLLAB.md。
 
+## 信任边界
+- 默认仅监听 127.0.0.1：未出本机即视为可信，未设 `API_TOKEN` 时 `/api` 全放行（首个 /api 请求时打一次性 WARNING 提示该口径）。
+- 设置 `API_TOKEN` 环境变量后，`/api` 全部请求必须携带 `Authorization: Bearer <token>`，`hmac.compare_digest` 常量时间比对，不匹配一律 401（error_code=unauthorized）；认证门位于限流之前，无效 token 不消耗限流配额。
+- 看板静态页与 `/healthz` 探活不受认证拦截。
+- 对外部署必须：设置 `API_TOKEN` + HTTPS 反向代理（token 为明文 Bearer，无 TLS 不得裸露）；本项目不内置多用户/权限体系。
+
 ## 砍掉清单
-连接池、回收后断点续跑、嵌套深合并、WebSocket、鉴权、迁移框架——均为与本规模不匹配或刻意取舍，逐项理由见 COLLAB.md。
+连接池、回收后断点续跑、嵌套深合并、WebSocket、迁移框架——均为与本规模不匹配或刻意取舍，逐项理由见 COLLAB.md。（鉴权已以 opt-in `API_TOKEN` 形式补齐，见上方「信任边界」。）

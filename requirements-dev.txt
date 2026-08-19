@@ -1,0 +1,5 @@
+# requirements-dev.txt —— 开发/测试依赖（按 venv 实际安装版本钉住，pip freeze 核对）
+# 运行依赖见 requirements.txt；本文件仅供本地开发与 CI 使用。
+pytest==9.1.1
+pytest-cov==7.1.0
+ruff==0.16.3
