@@ -1,7 +1,22 @@
 # COLLAB.md
 
+## 独立完成声明
+本作品由作者独立完成：题目允许“两人一组”，本提交为单人完成，特此声明。全程使用 AI 编码助手辅助（方案设计、代码实现、测试编写与问题排查），作者对全部代码与结论负最终责任。分歧裁决机制：AI 与作者意见不一致时，以测试与攻击脚本的实测结果为准（见下方 AI 纠错案例）。
+
 ## AI 工具使用情况
 全程使用 AI 编码助手辅助：方案设计、代码实现、测试编写与问题排查均在 AI 辅助下完成，分多个 session 迭代（含评审修复与证据补齐，时间线见 git log）。作者负责审阅每一处实现并验证结论。
+
+**AI 责任声明**：所有 AI 辅助产出均经人工审阅、测试验证，作者对其正确性负最终责任。
+
+## AI 纠错案例（AI 给出的错误方案 / 如何发现 / 纠正结果）
+| AI 给出的错误方案 | 如何发现 | 纠正结果 |
+|---|---|---|
+| 攻击脚本用 `GROUP BY id HAVING count(*)>1` 查重判重复认领 | 审阅时推演即发现破绽：tasks.id 是主键，库里结构性不可能出现重复 id 行，该查询恒返回零行——是死检查，永远“通过”、什么都没验证 | 改判据：同一任务被两个 worker 认领只可能表现为队列回传重复 id，故以队列去重 + DB 计数双向核对为准（scripts/attack_claim.py:13-15 注释存证） |
+| 幂等上报用常见写法 `INSERT ... ON CONFLICT DO NOTHING RETURNING (xmax = 0)` 区分首写/重复 | 对照 PostgreSQL 语义验证：xmax 表达式是给 DO UPDATE 用的；DO NOTHING 冲突时根本不返回行，表达式永远求值不到，属死代码 | 改为直接 `RETURNING 1`：fetchone() 得 None 即重复上报的唯一信号（board/logs.py:16-19 注释存证） |
+| test_seed 用例假设 seed 播种可直接叠加在 fixture 连接的事务之上 | 真库复现：fixture 连接断言后留在未提交事务中，持 tasks 表 ACCESS SHARE 锁，seed DDL 需 ACCESS EXCLUSIVE，撞 lock_timeout=5000ms 确定性报 LockNotAvailable（QA 真库定位） | 测试侧事务卫生修复：seed.main() 前先 commit 关闭 fixture 隐式事务释放锁，不改生产代码（commit c397357，全量 122 复绿） |
+| compose 的 seed 服务用 --force 每次 up 重建清库 | 评审发现：演示口径被破坏——注入的批量任务与看板进度每次重启归零，与“非破坏缺省”的项目纪律矛盾 | 改为缺省非破坏（仅空库播种），破坏性重建显式 --reset（commit 45654f0） |
+
+共同点：四条都不是靠 AI 自我反思发现，而是靠推演、真库实测、QA 复现与评审等**外部验证**发现；裁决一律以测试与攻击脚本实测为准。
 
 ## 验证方式（不依赖 AI 口头保证）
 1. `pytest tests -v`（真库实测）：**122 个用例全绿**（逐文件拆分：test_api 40 / test_params 30 / test_recovery 23 / test_db 7 / test_blindspots 5 / test_idempotent_log 5 / test_worker_fail 5 / test_seed 3 / test_watchdog 3 / test_stepidx 1）。口径说明：默认 addopts `-m "not slow"` 排除分钟级攻击用例；`pytest -m ""` 全量 123 个（含 test_attack_claim 的 slow 攻击用例）；CI 为全量口径。无数据库环境下 DB 用例自动 skip。
@@ -50,4 +65,4 @@
 8. **release 接线**：claimed→running 重试全败时先 `claim.release` 归还 pending 再跳过，比等租约到期更及时。
 9. **攻击日志 --out**：attack_claim.py 输出路径 argparse 参数化，默认不变。
 10. **注释修正**：finished_at 注释改为“预留终态打点，供排查/审计查询，当前看板未展示”（schema.sql 与 claim.py）。
-另同步：README/COLLAB 用例拆分数字按实测修正（test_params 25 / test_api 6）；.gitignore 补 `evidence/_*`；回归 pytest 41 全绿。
+另同步：README/COLLAB 用例拆分数字按实测修正（test_params 25 / test_api 6）；.gitignore 补 `evidence/_*`；回归 pytest 41 全绿（历史轮次口径：当时默认集共 41 用例；现行口径为默认集 122 / 全量 123）。

@@ -5,6 +5,9 @@ __pycache__/
 # Coverage 运行产物（CI 只出报告不入库）
 .coverage
 
+# CI artifact 归档目录（pytest junit / coverage xml 等，仅 CI 内产生）
+artifacts/
+
 # Virtual environment
 .venv/
 
@@ -12,8 +15,10 @@ __pycache__/
 .env
 
 # evidence/ 是运行时证据目录（attack_claim 攻击日志、watchdog 重启日志、
-# e2e 取证截图等均由运行期产生），不入库；覆盖 .log 与 .png 两类产物，
-# _ 前缀临时取证文件一并排除
+# e2e 取证截图等均由运行期产生），默认不入库；覆盖 .log 与 .png 两类产物，
+# _ 前缀临时取证文件一并排除。
+# 例外：claim_attack_run.log 是交付物合规证据，具名放行入库（见 evidence/README.md）
 evidence/_*
 evidence/*.log
+!evidence/claim_attack_run.log
 evidence/*.png
