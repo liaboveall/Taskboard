@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 
+# Coverage 运行产物（CI 只出报告不入库）
+.coverage
+
 # Virtual environment
 .venv/
 

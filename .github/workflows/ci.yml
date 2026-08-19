@@ -1,0 +1,53 @@
+# .github/workflows/ci.yml —— GitHub Actions CI：postgres:14 service + 全量 pytest + coverage
+#
+# 口径说明：
+#   - pyproject addopts 默认 `-m "not slow"`，CI 用命令行 `-m ""` 显式覆盖，
+#     全量执行（含 slow 的 attack_claim 真多进程攻击用例——有真库才跑得动）。
+#   - 覆盖率首跑只出报告不卡门禁（不设 fail-under）：待基线实测后再回填。
+#   - TB_STRICT_DB=1：隔离库 taskboard_test 供给失败时大声 fail，不容忍降级假绿
+#     （tests/conftest.py 的严格模式口径）。
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+      TB_STRICT_DB: "1"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run full test suite with coverage
+        # 显式 -m "" 覆盖 pyproject addopts 的 `-m "not slow"`：
+        # pytest 的 -m 命令行优先于 addopts，全量含 slow 用例
+        run: pytest -m "" --cov=board --cov-report=term-missing
