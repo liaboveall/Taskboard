@@ -1,4 +1,4 @@
-# tests/test_worker_fail.py —— worker 失败链 / 截断边界 / 围栏中止 / 心跳注入回归测试（对真实 PostgreSQL）
+# tests/test_worker_fail.py —— worker 失败链 / 截断边界 / 围栏中止 / 心跳注入 / 主循环兜底回归测试（对真实 PostgreSQL）
 import sys
 import time
 from pathlib import Path
@@ -196,7 +196,14 @@ def test_heartbeat_renews_lease_and_fenced_on_owner_change(conn, make_task):
     hb = worker.Heartbeat(tid, "W1", claim_epoch=epoch, interval=0.05)
     hb.start()
     try:
-        time.sleep(0.3)  # 约 6 个心跳周期，足够观察续租
+        # 防 flaky 口径：不用固定 sleep 等心跳，改 deadline 轮询等待
+        # claimed_at 被续租刷新（条件达成即 break）；轮询间隔 0.05s，
+        # 超时上限为原硬 sleep 0.3s 的 2 倍。
+        deadline = time.monotonic() + 0.6
+        while time.monotonic() < deadline:
+            if _claimed_at(conn, tid) > old_claimed_at:
+                break
+            time.sleep(0.05)
         new_claimed_at = _claimed_at(conn, tid)
         # claimed_at 被刷新过（≥1 次续租）：新值严格大于回填的旧值
         assert new_claimed_at is not None
@@ -217,3 +224,45 @@ def test_heartbeat_renews_lease_and_fenced_on_owner_change(conn, make_task):
         assert hb2.fenced.wait(timeout=1.0) is True
     finally:
         hb2.stop()  # stop() 幂等收线：线程 join + 独立连接关闭
+
+
+# ---------- ⑤ 主循环兜底：claim_next 异常 → 捕获后 sleep 继续，不崩 ----------
+
+def test_main_loop_survives_claim_next_error(monkeypatch):
+    """worker.main 主循环健壮性：claim_next 抛异常时不崩进程——
+    捕获 → _safe_rollback → sleep 后 continue。用哨兵异常打断
+    （monkeypatch 掉 sleep 避免真等 1s，同时断言 sleep(1) 被调用），
+    并 monkeypatch 掉定期 reaper，避免其先行触碰数据库。"""
+    from board import claim
+
+    class _Sentinel(BaseException):
+        """哨兵异常：从被 patch 的 sleep 抛出，证明主循环已走完
+        捕获→rollback→sleep 链路（不 patch sleep 则真睡 1s 后死循环）。"""
+
+    monkeypatch.setattr(sys, "argv", ["board.worker", "--id", "W-test"])
+    monkeypatch.setattr(claim, "reclaim_expired", lambda conn, lease: [])
+
+    calls = {"claim": 0, "rollback": 0}
+
+    def boom_claim(conn, worker_id):
+        calls["claim"] += 1
+        raise RuntimeError("simulated claim_next outage")
+
+    monkeypatch.setattr(claim, "claim_next", boom_claim)
+    monkeypatch.setattr(worker, "_safe_rollback", lambda conn: calls.__setitem__(
+        "rollback", calls["rollback"] + 1) or True)
+
+    sleeps = []
+
+    def fake_sleep(seconds):
+        sleeps.append(seconds)
+        raise _Sentinel  # 打断主循环：兜底链路已验证，不再继续
+
+    monkeypatch.setattr(worker.time, "sleep", fake_sleep)
+
+    with pytest.raises(_Sentinel):
+        worker.main()
+
+    assert calls["claim"] == 1       # claim_next 被调并抛错
+    assert calls["rollback"] == 1    # 异常后先 rollback 再继续
+    assert sleeps == [1]             # 捕获后 sleep(1s) 继续（被哨兵打断）

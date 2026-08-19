@@ -1,4 +1,4 @@
-# tests/attack_claim.py —— 真多进程认领攻击脚本（独立可执行，不依赖 pytest）
+# scripts/attack_claim.py —— 真多进程认领攻击脚本（独立可执行，不依赖 pytest）
 #
 # 设计要点：
 #   - spawn 上下文启动 10 个 worker 进程；连接在【子进程内部】新建，

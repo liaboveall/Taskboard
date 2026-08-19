@@ -5,7 +5,7 @@
 
 ## 验证方式（不依赖 AI 口头保证）
 1. `pytest tests -v`：**102 个用例全绿**（test_params 25 / test_api 34 / test_recovery 21 / test_db 7 / test_blindspots 5 / test_idempotent_log 5 / test_worker_fail 4 / test_stepidx 1；无数据库环境下 DB 用例自动 skip）。
-2. `tests/attack_claim.py`：multiprocessing spawn 真实多进程攻击，10 进程 × 10 轮 × 100 任务，判定 = 队列回传 id 去重 + DB 侧计数核对 + 参与度核对（distinct claimed_by ≥ 2），duplicate_claims=0（攻击日志已归档）。
+2. `scripts/attack_claim.py`：multiprocessing spawn 真实多进程攻击，10 进程 × 10 轮 × 100 任务，判定 = 队列回传 id 去重 + DB 侧计数核对 + 参与度核对（distinct claimed_by ≥ 2），duplicate_claims=0（攻击日志已归档）。
 3. 看板 E2E（新口径）：并发 5 次上报由前端 5 个并行 POST 承担，服务端每 POST 只执行 1 次真实上报、单 POST 响应 received=1；看板面板为 5 POST 聚合（received=5 / inserted=0 / duplicates_ignored=5，worker 先报、5 POST 全被去重）。
 4. 双 worker 并行运行，批量认领交错分摊。
 
@@ -30,7 +30,7 @@
 - test_recovery（21 用例）：reaper 回收、新鲜租约不回收、claimed_by fencing、owner 围栏写入、无 steps 任务快速 done。
 - test_api（34 用例）：404 任务不存在、409 状态门（done/pending 不可报）、手动上报不改任务状态、并发上报恰好插入 1 行、400 参数校验。
 - test_params 25（含嵌套结构整体替换行为锁定）；test_idempotent_log 5（含 error_message 落库）；test_db 7 / test_blindspots 5 / test_worker_fail 4 / test_stepidx 1。
-- tests/seed_demo_bulk.py：批量播种演示任务工具（--count，纯追加），用于复现双 worker 批量运行与 reaper 演示证据。
+- scripts/seed_demo_bulk.py：批量播种演示任务工具（--count，纯追加），用于复现双 worker 批量运行与 reaper 演示证据。
 
 ### 遗留取舍（答辩预案）
 - **first-report-wins 代价**：冲突即 DO NOTHING、无任何 UPDATE 路径，幂等正确性是结构性的；代价是 step 日志可能与任务终态分歧（真实瞬时失败 → 重试成功会永远记录为失败）。对策：失败必落 failed 且大声可观测（error_message 列 + stdout 告警），不再静默吞掉。备选 `ON CONFLICT DO UPDATE ... WHERE NOT success`（单调提升）语义更贴近业务，但正确性退化为依赖 WHERE 条件正确，演示系统不选。

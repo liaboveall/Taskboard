@@ -1,5 +1,5 @@
-# tests/seed_demo_bulk.py —— 批量演示数据播种（独立脚本，非 pytest 用例）
-# 用法: python tests/seed_demo_bulk.py [--count N]   （默认 N=80）
+# scripts/seed_demo_bulk.py —— 批量演示数据播种（独立脚本，非 pytest 用例）
+# 用法: python scripts/seed_demo_bulk.py [--count N]   （默认 N=80）
 #
 # 仅用于演示批量运行（复现 w1/w2 批量执行证据）。本脚本是纯追加 INSERT，
 # 绝不 TRUNCATE/清空任何表：可直接在已有数据的库上运行，重复执行会持续
@@ -16,7 +16,7 @@ import json
 import sys
 from pathlib import Path
 
-# 允许 `python tests/seed_demo_bulk.py` 直接运行（找到项目根下的 board 包）
+# 允许 `python scripts/seed_demo_bulk.py` 直接运行（找到项目根下的 board 包）
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from board import db  # noqa: E402
