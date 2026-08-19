@@ -122,4 +122,6 @@ stateDiagram-v2
 - **WebSocket**：这个数据量下 2 秒轮询和推送没有体验差别。
 - **嵌套参数深合并、迁移框架**：与规模不匹配；整体替换 + schema.sql 幂等重建够用。（鉴权未砍，以 opt-in `API_TOKEN` 形式提供。）
 
-补充材料：验证细节与 AI 纠错案例见 [COLLAB.md](COLLAB.md)；部署形态、信任边界、API 契约等运维细则见 [docs/operations.md](docs/operations.md)。
+补充材料：
+验证细节与 AI 纠错案例见 [COLLAB.md](COLLAB.md)；
+部署形态、信任边界、API 契约等运维细则见 [docs/operations.md](docs/operations.md)。
