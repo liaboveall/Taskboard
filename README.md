@@ -31,7 +31,7 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 | 4 | {} | 同上 |
 
 ## 真实并发如何保证
-`tests/attack_claim.py`：spawn 起 10 个独立进程，每个进程在子进程内新建独立数据库连接（非线程/协程级伪并发），Barrier 对齐起跑。判定 = 队列回传 id 去重 + DB 计数核对 + 多 worker 参与度核对。10 进程 × 10 轮 × 100 任务，**duplicate_claims=0**。
+`scripts/attack_claim.py`：spawn 起 10 个独立进程，每个进程在子进程内新建独立数据库连接（非线程/协程级伪并发），Barrier 对齐起跑。判定 = 队列回传 id 去重 + DB 计数核对 + 多 worker 参与度核对。10 进程 × 10 轮 × 100 任务，**duplicate_claims=0**。
 
 ## 自己发现的边界情况
 - L3 `""` 保留当前粘性值，不回跳 base/L2；L2 `""` 是字面值。

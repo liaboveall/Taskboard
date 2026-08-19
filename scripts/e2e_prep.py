@@ -1,4 +1,4 @@
-# tests/e2e_prep.py —— 浏览器 E2E 静态演示窗口制造器（只读/只写【演示库】）
+# scripts/e2e_prep.py —— 浏览器 E2E 静态演示窗口制造器（只读/只写【演示库】）
 #
 # 用途（T7 第 4 步）：为后续浏览器 E2E 验证制造一个不会被 worker 消费的
 #   静态 running 任务——worker 不启动，任务将一直保持 running，供前端展示与
@@ -13,7 +13,7 @@
 #   - 执行后回读并打印窗口明细（task id / claim_epoch / current_step /
 #     step_index 列表），浏览器代理按此构造上报请求。
 #
-# 用法：.venv\Scripts\python.exe tests\e2e_prep.py
+# 用法：.venv\Scripts\python.exe scripts\e2e_prep.py
 import os
 import sys
 from pathlib import Path

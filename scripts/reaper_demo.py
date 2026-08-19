@@ -1,7 +1,7 @@
-# tests/reaper_demo.py —— "回收重跑 × 幂等"一键复现脚本（正式脚本，非 pytest 收集）
+# scripts/reaper_demo.py —— "回收重跑 × 幂等"一键复现脚本（正式脚本，非 pytest 收集）
 #
 # 文件名刻意不带 test_ 前缀：pytest 不收集，可独立反复运行：
-#   .venv\Scripts\python.exe tests\reaper_demo.py
+#   .venv\Scripts\python.exe scripts\reaper_demo.py
 #
 # 只写隔离库 taskboard_test（绝不碰演示库 taskboard）：
 #   连接串从进程环境 DATABASE_URL 或 taskboard/.env 推导，仅把 dbname 替换为

@@ -196,7 +196,14 @@ def test_heartbeat_renews_lease_and_fenced_on_owner_change(conn, make_task):
     hb = worker.Heartbeat(tid, "W1", claim_epoch=epoch, interval=0.05)
     hb.start()
     try:
-        time.sleep(0.3)  # 约 6 个心跳周期，足够观察续租
+        # 防 flaky 口径：不用固定 sleep 等心跳，改 deadline 轮询等待
+        # claimed_at 被续租刷新（条件达成即 break）；轮询间隔 0.05s，
+        # 超时上限为原硬 sleep 0.3s 的 2 倍。
+        deadline = time.monotonic() + 0.6
+        while time.monotonic() < deadline:
+            if _claimed_at(conn, tid) > old_claimed_at:
+                break
+            time.sleep(0.05)
         new_claimed_at = _claimed_at(conn, tid)
         # claimed_at 被刷新过（≥1 次续租）：新值严格大于回填的旧值
         assert new_claimed_at is not None
