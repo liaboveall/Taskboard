@@ -1,0 +1,24 @@
+claim attack start: db=taskboard_evidence rounds=10 workers=10 tasks_per_round=100 reaper_round=on report_round=on (report_rounds=3 tasks=8 steps=[1, 2] flood_mult=2)
+round=1 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=2 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=3 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=4 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=5 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=6 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=7 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=8 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=9 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+round=10 queue_claims=100 db_claimed=100 db_pending=0 db_workers=10 dup_queue_ids=0 OK
+reaper-round phase=A queue_claims=100 dup=0 db_claimed=100 db_pending=0 OK
+reaper-round phase=B queue_reclaims=100 dup=0 db_claimed=100 db_pending=0 OK
+reaper-round epoch-monotonic violations=0 (must be 0)
+reaper-round stale-epoch transition hits=0 (must be 0)
+reaper-round result=OK
+report-round=1 reports=496 stale_fenced=160 stale_hits=0 winners=16/16 dup_wins=0 db_rows=16/16 row_ok=True attribution_ok=True
+report-round=1 result=OK
+report-round=2 reports=496 stale_fenced=160 stale_hits=0 winners=16/16 dup_wins=0 db_rows=16/16 row_ok=True attribution_ok=True
+report-round=2 result=OK
+report-round=3 reports=496 stale_fenced=160 stale_hits=0 winners=16/16 dup_wins=0 db_rows=16/16 row_ok=True attribution_ok=True
+report-round=3 result=OK
+rounds=10, workers=10, tasks=1000, duplicate_claims=0
+result=PASS, elapsed=3.14s
