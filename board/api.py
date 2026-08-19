@@ -242,7 +242,8 @@ def list_tasks():
             with conn.cursor() as cur:
                 cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                 task_sql = ("SELECT id, status, claimed_by, current_step, "
-                            "claim_epoch, base_params FROM tasks")
+                            "claim_epoch, base_params, retry_count, max_retries "
+                            "FROM tasks")
                 task_args = []
                 if after_id_raw is not None:
                     # keyset 分页：WHERE id > after_id ORDER BY id LIMIT limit
@@ -296,7 +297,8 @@ def list_tasks():
         })
 
     tasks = []
-    for tid, status, claimed_by, current_step, claim_epoch, base_params in task_rows:
+    for (tid, status, claimed_by, current_step, claim_epoch, base_params,
+         retry_count, max_retries) in task_rows:
         steps = steps_by_task.get(tid, [])
         tasks.append({
             "id": tid,
@@ -309,6 +311,10 @@ def list_tasks():
             # 字符串透传无损，前端原样回传、服务端归一化 int 后比对。
             "claim_epoch": str(claim_epoch),
             "base_params": base_params or {},
+            # 死信机制审计列（schema v3）：重试计数与上限；前端可暂不展示，
+            # int 值域无 2^53 精度风险，无需字符串化。
+            "retry_count": retry_count,
+            "max_retries": max_retries,
             "steps": steps,
             # 该任务已有日志的 step 数
             "log_count": sum(1 for s in steps if s["log"] is not None),
