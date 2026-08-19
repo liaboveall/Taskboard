@@ -1,0 +1,18 @@
+# pyproject.toml —— 项目工具配置（不做 PEP 621 打包元数据；
+# 运行依赖钉在 requirements.txt，开发依赖钉在 requirements-dev.txt）
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# 默认排除 slow 标记的长耗时攻击类用例；显式 -m slow 或 -m "" 可覆盖
+addopts = '-m "not slow"'
+markers = [
+    "slow: long-running attack tests",
+]
+
+[tool.ruff]
+line-length = 110
+
+[tool.coverage.run]
+source = ["board"]
+# cov-fail-under 刻意暂不设：待 CI 接入实测覆盖率基线后回填，
+# 避免无库环境（大量 skip）下误卡门禁。
