@@ -47,6 +47,10 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 - 看板 E2E 验证：并发 5 次上报全去重、竞速失败如实渲染。
 - 更多验证细节见 COLLAB.md。
 
+## API 契约变更声明（相对早期版本的对外行为变更）
+1. **GET /api/tasks 默认截断**：缺省行为由全量快照改为默认截断前 1000 条（缺省 limit=1000；显式 limit 超 2000 时夹紧到 2000，不报错）。是否还有后续页由响应头 `X-Has-More: true` 传达；需要全量数据的消费方应携带 `after_id` 循环翻页直至该头为 false。
+2. **claim_epoch 读端字符串化**：GET 输出的 `claim_epoch` 由数字变为字符串（PG bigint 可超 JS Number 的 2^53 安全整数边界，字符串透传无损）。写端 POST report 的 `expected_epoch` 维持双接受：int 与纯十进制数字串（≤19 位，对齐 bigint 值域）；迁移方式：读端拿到字符串后原样透传即可，无需自行转数字。
+
 ## 部署
 - **生产启动（waitress）**：`.venv\Scripts\python.exe -m board.api` 自动以 `waitress.serve` 提供（线程数 `TB_WSGI_THREADS` 可覆盖，默认 8）；waitress 缺失时回退 werkzeug `app.run`（debug 关闭）并打 WARNING 提示非生产级。选型理由：gunicorn 不支持 Windows（本项目演示/部署环境以 Windows 为主）；waitress 是纯 Python 单进程多线程 WSGI 服务器，与项目内 threading.Lock 限流、模块级状态的进程内语义一致——多进程部署会分裂限流计数等进程内状态，需下沉到反向代理层解决，故不内置多进程方案。
 - **守护拉起链路（watchdog）**：`.venv\Scripts\python.exe watchdog.py` 守护 api + worker W1/W2：子进程退出即按策略重拉——非 0 退出按 3s→6s→12s→30s 指数退避（防配置性故障触发重启风暴），rc=0 优雅退出置停止态不再拉起；职责边界只管进程存活，被收割任务的回收由 worker 主循环的租约 reaper 负责。建议用 WMI（Win32_Process.Create）启动 watchdog 使其脱离 shell 进程树。

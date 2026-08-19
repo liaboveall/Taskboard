@@ -536,6 +536,21 @@ def test_report_400_expected_epoch_non_digit_string(client, make_task):
     assert resp.get_json()["error_code"] == "invalid_field"
 
 
+@needs_db
+def test_report_400_expected_epoch_overlong_digit_string(client, make_task):
+    # 超 19 位数字串（超出 PG bigint 值域）：\d{1,19} 校验收紧后
+    # 直接 400 invalid_field，不再交给 int()（Python 3.11+ 位数上限
+    # 会让 4300+ 位串抛 ValueError 走成 500）
+    tid = make_task(status="running", claimed_by="W-api")
+    resp = client.post(
+        f"/api/tasks/{tid}/steps/1/report",
+        json={"success": True, "expected_owner": "W-api",
+              "expected_epoch": "9" * 5000},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "invalid_field"
+
+
 # ---------- ⑯ T5 force 逃生门：不带 owner/epoch 字段也能强制通过 ----------
 
 @needs_db

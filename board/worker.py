@@ -336,6 +336,10 @@ def run_task(conn, task_id, worker_id, claim_epoch=None):
         started = claim.transition(conn, task_id, "claimed", "running",
                                    claimed_by=worker_id, claim_epoch=claim_epoch)
     except Exception:
+        # 不改控制流，先补 DEBUG 留痕（口径与其余 6 处“失败/夺权/翻转”
+        # 留痕一致：异常不吞、不改变后续判定，exc_info 完整落栈供排查）
+        logger.debug("claimed->running transition error for task %s", task_id,
+                     exc_info=True)
         if not _safe_rollback(conn):
             return False
         started = False

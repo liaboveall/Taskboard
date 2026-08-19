@@ -11,6 +11,9 @@ __pycache__/
 # Local secrets (use .env.example as template)
 .env
 
-# NOTE: evidence/ is intentionally tracked in git — do NOT add it here
-# 仅排除临时取证文件（_ 前缀），防止误提交
+# evidence/ 是运行时证据目录（attack_claim 攻击日志、watchdog 重启日志、
+# e2e 取证截图等均由运行期产生），不入库；覆盖 .log 与 .png 两类产物，
+# _ 前缀临时取证文件一并排除
 evidence/_*
+evidence/*.log
+evidence/*.png

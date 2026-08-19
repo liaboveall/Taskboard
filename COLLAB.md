@@ -4,7 +4,7 @@
 全程使用 AI 编码助手辅助：方案设计、代码实现、测试编写与问题排查均在 AI 辅助下完成，分多个 session 迭代（含评审修复与证据补齐，时间线见 git log）。作者负责审阅每一处实现并验证结论。
 
 ## 验证方式（不依赖 AI 口头保证）
-1. `pytest tests -v`：**102 个用例全绿**（test_params 25 / test_api 34 / test_recovery 21 / test_db 7 / test_blindspots 5 / test_idempotent_log 5 / test_worker_fail 4 / test_stepidx 1；无数据库环境下 DB 用例自动 skip）。
+1. `pytest tests -v`（真库实测）：**122 个用例全绿**（逐文件拆分：test_api 40 / test_params 30 / test_recovery 23 / test_db 7 / test_blindspots 5 / test_idempotent_log 5 / test_worker_fail 5 / test_seed 3 / test_watchdog 3 / test_stepidx 1）。口径说明：默认 addopts `-m "not slow"` 排除分钟级攻击用例；`pytest -m ""` 全量 123 个（含 test_attack_claim 的 slow 攻击用例）；CI 为全量口径。无数据库环境下 DB 用例自动 skip。
 2. `scripts/attack_claim.py`：multiprocessing spawn 真实多进程攻击，10 进程 × 10 轮 × 100 任务，判定 = 队列回传 id 去重 + DB 侧计数核对 + 参与度核对（distinct claimed_by ≥ 2），duplicate_claims=0（攻击日志已归档）。
 3. 看板 E2E（新口径）：并发 5 次上报由前端 5 个并行 POST 承担，服务端每 POST 只执行 1 次真实上报、单 POST 响应 received=1；看板面板为 5 POST 聚合（received=5 / inserted=0 / duplicates_ignored=5，worker 先报、5 POST 全被去重）。
 4. 双 worker 并行运行，批量认领交错分摊。
@@ -21,15 +21,15 @@
 | 轻微 | schema 重复执行报错、失败不可观测 | IF NOT EXISTS 非破坏幂等化；step_logs 新增 error_message 列、tasks 新增 finished_at；step_index/current_step CHECK>=1；部分索引 idx_tasks_pending / idx_tasks_lease |
 
 ### 验证方式
-1. **pytest 102 用例全绿**（本机有 PostgreSQL，无 skip）。
+1. **pytest 全绿**（本机有 PostgreSQL，无 skip）：默认 addopts 口径 122 个用例；`-m ""` 全量口径 123 个（含 slow 攻击用例），逐文件拆分见本节首条。
 2. **攻击测试**：攻击测试末行 `result=PASS, duplicate_claims=0`；test_stepidx.py 非连续 step_index 1/3/7 口径已入 pytest。
 3. **reaper 实杀演示**：LEASE_SECONDS=15 下 W1 执行任务 2 时被强杀，W2 打印 `reclaimed expired tasks: [2]` 后重新认领并跑到 done。
 4. **浏览器 E2E 正反例**：正例：5 POST 聚合 received=5/inserted=0/duplicates_ignored=5；反例：竞速失败 5/5 POST 返回 409，红色错误面板如实渲染（H3 修复验证）。
 
 ### 新测试清单
-- test_recovery（21 用例）：reaper 回收、新鲜租约不回收、claimed_by fencing、owner 围栏写入、无 steps 任务快速 done。
-- test_api（34 用例）：404 任务不存在、409 状态门（done/pending 不可报）、手动上报不改任务状态、并发上报恰好插入 1 行、400 参数校验。
-- test_params 25（含嵌套结构整体替换行为锁定）；test_idempotent_log 5（含 error_message 落库）；test_db 7 / test_blindspots 5 / test_worker_fail 4 / test_stepidx 1。
+- test_recovery（23 用例）：reaper 回收、新鲜租约不回收、claimed_by fencing、owner 围栏写入、无 steps 任务快速 done、epoch 代际围栏、死信重试上限、状态翻转白名单。
+- test_api（40 用例）：404 任务不存在、409 状态门（done/pending 不可报）、手动上报不改任务状态、并发上报恰好插入 1 行、400 参数校验、限流 429、分页/ETag、token 认证、expected_epoch 围栏与字符串化兼容（含超长数字串 400）。
+- test_params 30（含嵌套结构整体替换行为锁定）；test_idempotent_log 5（含 error_message 落库）；test_db 7 / test_blindspots 5 / test_worker_fail 5 / test_seed 3 / test_watchdog 3 / test_stepidx 1。
 - scripts/seed_demo_bulk.py：批量播种演示任务工具（--count，纯追加），用于复现双 worker 批量运行与 reaper 演示证据。
 
 ### 遗留取舍（答辩预案）

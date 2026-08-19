@@ -92,6 +92,9 @@ MAX_LIMIT = 2000
 # ---------- 可选 token 认证：API_TOKEN 非空时拦截全部 /api 请求 ----------
 # opt-in 口径：未设置 API_TOKEN 时全放行（可信本机环境），只打一次性
 # WARNING（模块级标志防轮询刷屏）；设置后 Bearer token 不匹配一律 401。
+# 竞态留档（评审确认的良性竞争）：该“检查-置位”在 waitress 多线程下无锁，
+# 首波并发请求可能重复置位前各自打出 WARNING —— 最坏后果是日志里重复数条
+# 同文案告警，无正确性影响；加锁收益不足以抵消复杂度，故保持现状留档。
 # 钩子位置口径：before_request 先于视图函数体执行 → 认证门天然位于
 # report 限流判定之前：非法请求在认证层即被拒，不消耗限流窗口额度，
 # 防无效 token 洪水耗尽合法客户端配额。比对用 hmac.compare_digest
@@ -473,13 +476,17 @@ def report(tid, seq):
                               400, "expected_owner_invalid")
             expected_epoch = body.get("expected_epoch")
             # 双入参兼容（claim_epoch 字符串化的配套放宽）：接受 int（bool 拒收）
-            # 或纯十进制数字字符串（^\d+$，GET 字符串化后前端原样透传的形态）；
+            # 或纯十进制数字字符串（^\d{1,19}$，GET 字符串化后前端原样透传的形态）；
             # 其余类型一律 400，消灭静默跳过。
+            # 数字串上限口径：\d{1,19} 对齐 PG bigint 值域（最多 19 位十进制）。
+            # 若不设限，Python 3.11+ 的 int() 位数上限会让 4300+ 位数字串
+            # 抛 ValueError 走成 500；而超 19 位必然不等于库内 bigint，
+            # 在校验门以 400 拒绝语义自洽。
             if expected_epoch is not None and not (
                 (isinstance(expected_epoch, int)
                  and not isinstance(expected_epoch, bool))
                 or (isinstance(expected_epoch, str)
-                    and re.fullmatch(r"\d+", expected_epoch))
+                    and re.fullmatch(r"\d{1,19}", expected_epoch))
             ):
                 return reject({"error": "expected_epoch must be an integer or a "
                                         "decimal-digit string "
@@ -650,8 +657,11 @@ if __name__ == "__main__":
         import waitress
     except ImportError:
         logger.warning("waitress 未安装：回退 werkzeug 开发服务器"
-                       "（单线程语义弱化、非生产级，建议 pip install waitress）")
-        app.run(host=host, port=port, debug=False)
+                       "（threaded=True 对齐 waitress 多线程语义、非生产级，"
+                       "建议 pip install waitress）")
+        # threaded=True：与基线语义对齐——werkzeug 缺省单线程，回退分支
+        # 若不同步开多线程会把并发轮询/上报退化为串行排队。
+        app.run(host=host, port=port, debug=False, threaded=True)
     else:
         waitress.serve(app, host=host, port=port,
                        threads=db.env_int("TB_WSGI_THREADS", 8))
