@@ -1,4 +1,4 @@
-# 任务调度看板（kGroup 实习生笔试题·题目一）
+# 任务调度看板
 
 Python（Flask + psycopg 3）+ PostgreSQL：三层参数合并、并发认领、幂等 step 日志、单文件状态看板。并发正确性全部下沉到 PostgreSQL 行锁与唯一约束，**零外部中间件**。
 
@@ -10,19 +10,19 @@ Python（Flask + psycopg 3）+ PostgreSQL：三层参数合并、并发认领、
 
 **实际耗时：约 12 小时**（口径：git 首末提交自然跨度 2026-08-18 23:29 → 2026-08-19 11:31，含规划/验证/答辩准备；纯编码时段见 `git log`）
 
-**语言选择**：Python，作者最熟。并发正确性全部下沉到数据库行锁与唯一约束，应用层不持有分布式状态；本规模（≤10 worker、≤5 TPS）用不上 MQ/Redis。
+**语言选择**：Python，最熟练。并发正确性全部下沉到数据库行锁与唯一约束，应用层不持有分布式状态；本规模（≤10 worker、≤5 TPS）用不上 MQ/Redis。
 
 ## 快速开始
 ```bash
+# Docker（零本机依赖）
+docker compose up --build                       # postgres → seed → api → worker 依次就绪
+# 看板 http://127.0.0.1:5000；收尾 docker compose down
+
 # 裸机（Python 3.12 + 本机 PostgreSQL）
 python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt
 createdb taskboard && copy .env.example .env    # Linux/macOS 用 cp；在 .env 填入 DATABASE_URL
 .venv\Scripts\python.exe -m board.seed && .venv\Scripts\python.exe -m board.worker --id W1
 .venv\Scripts\python.exe -m board.api           # 打开 http://localhost:5000
-
-# Docker（零本机依赖）
-docker compose up --build                       # postgres → seed → api → worker 依次就绪
-# 看板 http://127.0.0.1:5000；收尾 docker compose down
 ```
 
 <details>
@@ -66,7 +66,7 @@ stateDiagram-v2
     failed --> [*]
 ```
 
-## 参数"当前生效值"的演变（test_params.py 逐 Step 断言证明）
+## 参数"当前生效值"的演变
 起点 = base ⊕ L2；之后逐 Step 粘性推进，L3 `""` 保留当前值、不回跳 base。例：base={a:1,b:2,c:3}，L2={a:10,d:4}：
 
 | Step | L3 override | 生效快照 |
@@ -76,14 +76,14 @@ stateDiagram-v2
 | 3 | {a:100} | {a:100,b:20,c:3,d:4} |
 | 4 | {} | 同上 |
 
-## 并发证据（实测，非口头保证）
+## 并发证据
 `scripts/attack_claim.py` spawn 10 真进程攻击：判定 = 队列回传 id 去重 + DB 计数双向核对 + 参与度核对；全量口径另含组合轮/洪泛轮深验，细节见 [COLLAB.md](COLLAB.md)。
 
 | workers | rounds | tasks | duplicate_claims | 结果 | 日志 |
 |---|---|---|---|---|---|
 | 10 | 10 | 1000 | **0** | PASS | [evidence/claim_attack_run.log](evidence/claim_attack_run.log) |
 
-## 自己发现的边界情况
+## 边界情况
 - `""` 哨兵：仅精确 `""`（假值 0/False/None 不是）；L3 `""` 保留当前粘性值不回跳，L2 `""` 是字面值；作用于未定义 key 则 key 保持不存在。
 - 嵌套 dict override 整体替换、非深合并（刻意取舍，有测试锁定）；step_index 可不连续，按真实序号上报。
 
