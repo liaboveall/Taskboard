@@ -1,6 +1,6 @@
 # board/claim.py —— 任务认领与状态流转
 #
-# 核心设计（答辩重点）：
+# 核心设计：
 #   claim_next 用【单条 UPDATE + 子查询 FOR UPDATE SKIP LOCKED】完成认领，
 #   这是原子的：数据库保证一行在同一时刻只能被一个事务锁定。
 #   - FOR UPDATE SKIP LOCKED：并发的 worker 遇到已被锁定的候选行直接跳过，

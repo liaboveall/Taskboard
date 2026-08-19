@@ -1,6 +1,6 @@
 # board/logs.py —— 步骤结果上报（幂等，first-report-wins）
 #
-# 核心设计（答辩重点）：
+# 核心设计：
 #   step_logs 的主键是 (task_id, step_index) —— 每个 step 的日志结构性地
 #   至多一行。用 INSERT ... ON CONFLICT DO NOTHING 实现幂等上报：
 #   - 首次写入成功：返回 inserted=True；

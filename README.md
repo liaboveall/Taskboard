@@ -1,100 +1,110 @@
 # 任务调度看板
 
-Python（Flask + psycopg 3）+ PostgreSQL：三层参数合并、并发认领、幂等 step 日志、单文件状态看板。并发正确性全部下沉到 PostgreSQL 行锁与唯一约束，**零外部中间件**。
+kGroup 笔试题一（全栈方向）：多 worker 任务调度系统的后端 + 极简状态看板。技术栈 Python（Flask + psycopg 3）+ PostgreSQL，并发正确性全部交给数据库的行锁和唯一约束，没有引入任何外部中间件。
 
-**亮点速览**
-- 零重复认领实测：10 真进程 × 10 轮 × 100 任务，`duplicate_claims=0`（[攻击日志](evidence/claim_attack_run.log)）
-- 默认集 122 用例（排除 slow）/ 全量 123（含攻击测试），真库全绿
-- 幂等 first-report-wins：主键 + `ON CONFLICT DO NOTHING`，结构性保证、无应用层判断
-- Docker 一键：`docker compose up --build` 即得 postgres/seed/api/worker 全套
+**实际耗时**：约 12 小时（git 首末提交 2026-08-18 23:29 → 2026-08-19 11:31，含规划、验证与文档整理；过程见 `git log`）。
 
-**实际耗时：约 12 小时**（口径：git 首末提交自然跨度 2026-08-18 23:29 → 2026-08-19 11:31，含规划/验证/答辩准备；纯编码时段见 `git log`）
+## 语言与数据库选择
 
-**语言选择**：Python，最熟练。并发正确性全部下沉到数据库行锁与唯一约束，应用层不持有分布式状态；本规模（≤10 worker、≤5 TPS）用不上 MQ/Redis。
+- 选 Python 因为它是我最熟练的语言。并发安全不依赖语言运行时——全部下沉到数据库，应用层不持有共享状态，GIL 因此不构成威胁。
+- 怎么保证并发测试是"真实并发"：Python 的线程和 asyncio 正是题目点名的语言层伪并发，所以攻击脚本用 multiprocessing spawn 出 10 个独立进程，各建各的数据库连接同时抢任务，和真实部署里多进程/跨机器 worker 是同一形态。
+- 数据库选 PostgreSQL 而不是 SQLite：认领逻辑建立在 `FOR UPDATE SKIP LOCKED` 的行级锁上，这本来就是客户端-服务器数据库的能力，也省去"换到 PG 后是否依然成立"的论证。
 
 ## 快速开始
+
 ```bash
 # Docker（零本机依赖）
-docker compose up --build                       # postgres → seed → api → worker 依次就绪
+docker compose up --build      # postgres → seed → api → worker 依次就绪
 # 看板 http://127.0.0.1:5000；收尾 docker compose down
 
 # 裸机（Python 3.12 + 本机 PostgreSQL）
 python -m venv .venv && .venv\Scripts\python.exe -m pip install -r requirements.txt
-createdb taskboard && copy .env.example .env    # Linux/macOS 用 cp；在 .env 填入 DATABASE_URL
-.venv\Scripts\python.exe -m board.seed && .venv\Scripts\python.exe -m board.worker --id W1
-.venv\Scripts\python.exe -m board.api           # 打开 http://localhost:5000
+createdb taskboard && copy .env.example .env       # Linux/macOS 用 cp；在 .env 填 DATABASE_URL
+.venv\Scripts\python.exe -m board.seed             # 建表并播种演示任务
+.venv\Scripts\python.exe -m board.worker --id W1   # 第二个终端再起 --id W2 即双 worker
+.venv\Scripts\python.exe -m board.api              # 打开 http://localhost:5000
 ```
 
 <details>
-<summary>完整启动步骤与环境变量表（展开）</summary>
+<summary>环境变量表（展开）</summary>
 
-裸机：seed 播种（`--reset` 破坏性重建）；第二终端再起一个 `--id W2` worker 即双 worker 并行。
+seed 默认非破坏（只在空库播种）；`--reset` 显式清库重建。
 
-| 变量 | 作用 | 缺省 |
+| 变量 | 作用 | 默认 |
 |---|---|---|
-| `DATABASE_URL` | PostgreSQL 连接串 | 无（必填，或 .env） |
-| `LEASE_SECONDS` | 任务租约秒数（超期由 reaper 回收） | 60 |
-| `API_TOKEN` | 设置后 `/api` 强制 Bearer 认证 | 未设（仅 127.0.0.1 口径） |
+| `DATABASE_URL` | PostgreSQL 连接串 | 必填（可写在 .env） |
+| `LEASE_SECONDS` | 任务租约秒数，超期由 reaper 回收 | 60 |
+| `API_TOKEN` | 设置后 `/api` 全部要求 Bearer 认证 | 未设（默认仅监听本机） |
 | `API_HOST` | API 监听地址 | 127.0.0.1 |
 | `TB_WSGI_THREADS` | waitress 线程数 | 8 |
-| `TB_CONNECT_TIMEOUT` / `TB_LOCK_TIMEOUT_MS` / `TB_STATEMENT_TIMEOUT_MS` | 连接/锁/语句超时 | 见 board/db.py |
-| `TB_STRICT_DB` | =1 时测试隔离库供给失败大声 fail | 关 |
-| `WATCHDOG_PYTHON` | watchdog 拉子进程用的解释器 | .venv 内 python |
+| `TB_CONNECT_TIMEOUT` / `TB_LOCK_TIMEOUT_MS` / `TB_STATEMENT_TIMEOUT_MS` | 连接 / 锁 / 语句超时 | 见 board/db.py |
+| `TB_STRICT_DB` | =1 时测试隔离库不可用直接报错而非 skip | 关 |
+| `WATCHDOG_PYTHON` | watchdog 拉起子进程用的解释器 | .venv 内 python |
 
 </details>
 
 ## 架构简述
-- 参数合并：L1 base / L2 group / L3 step 三层粘性折叠，L3 `""` 为"不覆盖"哨兵。
-- 并发认领：单条原子 UPDATE + `FOR UPDATE SKIP LOCKED`；任务状态唯一写者是 worker。
-- 幂等：step_logs 主键 `(task_id, step_index)` + `ON CONFLICT DO NOTHING`，first-report-wins。
-- 租约回收：超期任务由 reaper 回收重跑，状态流转与日志写入带 owner/epoch 围栏。
+
+四个硬性需求对应四块实现：
+
+1. **参数合并**（board/params.py）：纯函数。起点是 base 合入 group override，之后逐 step 折叠 L3——某个 key 一旦被覆盖，新值带给后续所有 step（粘性）；L3 里 `""` 表示"本步不覆盖"，保留当前生效值而不是回跳 base。
+2. **并发认领**（board/claim.py）：一条 `UPDATE ... WHERE id = (SELECT ... FOR UPDATE SKIP LOCKED)` 原子完成认领。行锁保证同一行同一时刻只属于一个事务，其它 worker 直接跳过锁定行；不做"先 SELECT 再 UPDATE"，两步之间就是竞态窗口。
+3. **幂等日志**（board/logs.py）：step_logs 主键 `(task_id, step_index)` + `ON CONFLICT DO NOTHING`，先到先得。重复上报被主键挡下；代码里没有 UPDATE 路径，后到的上报想把成功改成失败也无从下手。
+4. **看板**（static/index.html）：单文件页面，2 秒轮询（失败时指数退避）。每个 running 任务带"并发上报 ×5"按钮，5 个并行 POST 打向同一 step，面板显示收到 5 条、实际至多落库 1 条，现场演示幂等。
+
+容错：认领时间兼作租约，worker 用独立心跳线程续租；超期任务由 reaper 收回 pending 重新排队，达到重试上限则进 failed 死信。被夺权的旧 worker 后续所有写操作都因 `(claimed_by, claim_epoch)` 围栏对不上而落空。
 
 ```mermaid
 stateDiagram-v2
     [*] --> pending
-    pending --> claimed : claim_next（SKIP LOCKED 原子认领）
-    claimed --> running : worker 开始执行
+    pending --> claimed : claim_next（SKIP LOCKED）
+    claimed --> running : 开始执行
+    claimed --> pending : release 归还 / 租约超期回收
+    running --> pending : 租约超期回收
     running --> done : 全部 step 成功
-    running --> failed : 重试耗尽（error_message 落库）
-    claimed --> failed : 起步即失败兜底（未及 running 就异常）
-    claimed --> failed : 重试上限死信（reaper 回收不再重排）
-    running --> failed : 重试上限死信（reaper 回收不再重排）
-    claimed --> pending : claimed→running 失败，release 归还
-    claimed --> pending : 租约超期，reaper 回收
-    running --> pending : 租约超期，reaper 回收
+    claimed --> failed : 起步异常 / 达重试上限
+    running --> failed : step 失败 / 达重试上限
     done --> [*]
     failed --> [*]
 ```
 
 ## 参数"当前生效值"的演变
-起点 = base ⊕ L2；之后逐 Step 粘性推进，L3 `""` 保留当前值、不回跳 base。例：base={a:1,b:2,c:3}，L2={a:10,d:4}：
+
+例：base = {a:1, b:2, c:3}，group override = {a:10, d:4}，起点即 {a:10, b:2, c:3, d:4}：
 
 | Step | L3 override | 生效快照 |
 |---|---|---|
-| 1 | {b:20, e:""} | {a:10,b:20,c:3,d:4}（e 未定义过，保持不存在） |
-| 2 | {a:"", c:""} | 同上（哨兵跳过） |
-| 3 | {a:100} | {a:100,b:20,c:3,d:4} |
-| 4 | {} | 同上 |
+| 1 | {b:20, e:""} | {a:10, b:20, c:3, d:4}（e 从未定义，保持不存在） |
+| 2 | {a:"", c:""} | 同上——`""` 全部跳过，a 保持 10 而不是回跳 1 |
+| 3 | {a:100} | {a:100, b:20, c:3, d:4} |
+| 4 | {} | 同上（粘性延续） |
 
-## 并发证据
-`scripts/attack_claim.py` spawn 10 真进程攻击：判定 = 队列回传 id 去重 + DB 计数双向核对 + 参与度核对；全量口径另含组合轮/洪泛轮深验，细节见 [COLLAB.md](COLLAB.md)。
+边界用例集中在 tests/test_params.py（30 个）。
 
-| workers | rounds | tasks | duplicate_claims | 结果 | 日志 |
-|---|---|---|---|---|---|
-| 10 | 10 | 1000 | **0** | PASS | [evidence/claim_attack_run.log](evidence/claim_attack_run.log) |
+## 并发测试证据
 
-## 边界情况
-- `""` 哨兵：仅精确 `""`（假值 0/False/None 不是）；L3 `""` 保留当前粘性值不回跳，L2 `""` 是字面值；作用于未定义 key 则 key 保持不存在。
-- 嵌套 dict override 整体替换、非深合并（刻意取舍，有测试锁定）；step_index 可不连续，按真实序号上报。
+`scripts/attack_claim.py`：10 个 spawn 进程 × 10 轮 × 每轮 100 任务。判重不靠查库里有没有重复行（tasks.id 是主键，重复行结构上不可能出现，那是死检查），而是把各进程回传的认领 id 合并去重、与库内计数双向核对，再看 claimed_by 分布确认各进程真的都抢到了活。
 
-## 测试与验证
-- 本地默认 `pytest`：默认集 122（排除 slow）；`pytest -m ""` 全量 123（含攻击测试）。无 PostgreSQL 时 DB 用例自动 skip 并打印"假绿警告"。覆盖率不设 fail-under，待 CI 基线实测后回填。
-- CI：GitHub Actions postgres:14 service + `TB_STRICT_DB=1` 全量跑，pytest 输出/junit/coverage 归档 artifact（保留 30 天）。
-- 看板 E2E：并发 5 次上报全去重、竞速失败如实渲染。更多见 [COLLAB.md](COLLAB.md)。
+| workers | rounds | tasks | duplicate_claims | 结果 |
+|---|---|---|---|---|
+| 10 | 10 | 1000 | **0** | PASS（[完整日志](evidence/claim_attack_run.log)） |
 
-## 砍掉清单
-连接池、回收后断点续跑、嵌套深合并、WebSocket、迁移框架——均为与本规模不匹配或刻意取舍，逐项理由见 COLLAB.md。（鉴权已以 opt-in `API_TOKEN` 形式补齐。）
+测试：本地 `pytest` 默认 122 个用例（排除慢速攻击用例），`pytest -m ""` 全量 123；无 PostgreSQL 时 DB 用例自动 skip 并打警告。CI（GitHub Actions + postgres:14）跑全量并归档输出。
 
-## 细则索引
-- 部署形态取舍 / 信任边界细则 / API 契约变更声明 / Docker 详命令与数据生命周期 / 目录约定 → [docs/operations.md](docs/operations.md)
-- 验证细节 / 历轮修复清单 / AI 纠错案例 → [COLLAB.md](COLLAB.md)
+## 发现的边界情况
+
+- `""` 哨兵只认精确空字符串，0 / False / None 都是正常值照常覆盖；`""` 作用于从未定义的 key 时，该 key 保持不存在。
+- L2 的 `""` 是字面值、L3 的 `""` 是哨兵，两层语义刻意不对称（题目原文如此），有测试锁定。
+- 嵌套 dict override 整体替换、不做深合并——刻意取舍，同样有测试锁定。
+- step_index 允许不连续（1/3/7 也合法），上报与推进都按真实序号走。
+- 手动上报会和 reaper 回收竞态：report 端点的状态读加 `FOR UPDATE`，行锁保持到日志落库提交，与回收互斥。
+- first-report-wins 的代价：瞬时失败后重试成功，日志仍永远记为失败。对策是失败必落库且可观测（error_message 列），不静默吞掉。
+
+## 砍掉了什么、为什么
+
+- **连接池**：≤5 TPS 每请求建连绰绰有余，池的配置项和超时语义反而是负担。
+- **回收后断点续跑**：回收任务整体重跑，已完成 step 被幂等主键自动挡下；真续跑要持久化 step 级游标，复杂度与收益不成比例。
+- **WebSocket**：这个数据量下 2 秒轮询和推送没有体验差别。
+- **嵌套参数深合并、迁移框架**：与规模不匹配；整体替换 + schema.sql 幂等重建够用。（鉴权未砍，以 opt-in `API_TOKEN` 形式提供。）
+
+补充材料：验证细节与 AI 纠错案例见 [COLLAB.md](COLLAB.md)；部署形态、信任边界、API 契约等运维细则见 [docs/operations.md](docs/operations.md)。
