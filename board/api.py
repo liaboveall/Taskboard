@@ -36,7 +36,7 @@
 #   POST /api/tasks/<tid>/steps/<seq>/report    幂等上报，契约如上
 import collections
 import hashlib
-import os
+import logging
 import threading
 import time
 import uuid
@@ -569,6 +569,22 @@ def handle_http_exception(e):
 if __name__ == "__main__":
     # 统一 logging 配置（本入口无自有 print；Flask/werkzeug 请求日志随之走统一格式）
     logconf.setup("board.api")
-    # threaded=True：支持前端轮询与并发 POST 同时进行；
-    # 端口支持环境变量 PORT（默认 5000）。
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5000")), threaded=True)
+    logger = logging.getLogger("board.api")
+    # 服务器选型口径：gunicorn 不支持 Windows，本项目演示/部署环境以 Windows 为主；
+    # waitress 是纯 Python 单进程多线程 WSGI 服务器，并发模型与项目内既有的
+    # threading.Lock 限流、模块级状态及 psycopg_pool 连接池（进程内线程安全
+    # 共享）语义一致，无需为多进程部署重审状态边界。threads 可经
+    # TB_WSGI_THREADS 覆盖（默认 8）。
+    # waitress 缺失（最小环境未装）时回退 werkzeug 自带 app.run（debug 关闭）：
+    # 明确 WARNING 提示非生产级，保演示链路不断。
+    host = "127.0.0.1"
+    port = db.env_int("PORT", 5000)
+    try:
+        import waitress
+    except ImportError:
+        logger.warning("waitress 未安装：回退 werkzeug 开发服务器"
+                       "（单线程语义弱化、非生产级，建议 pip install waitress）")
+        app.run(host=host, port=port, debug=False)
+    else:
+        waitress.serve(app, host=host, port=port,
+                       threads=db.env_int("TB_WSGI_THREADS", 8))
