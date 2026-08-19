@@ -54,6 +54,19 @@
     margin-left: auto; display: flex; align-items: center; gap: 8px;
     font-size: 12px; color: var(--ink-dim); letter-spacing: .05em;
   }
+
+  /* ---------- 可选 token 输入（API_TOKEN 开启时附带 Authorization 头） ---------- */
+  .token-box {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--ink-dim); letter-spacing: .12em;
+  }
+  .token-box input {
+    font-family: var(--mono); font-size: 12px; color: var(--ink);
+    background: var(--bg-panel); border: 1px solid var(--line);
+    padding: 3px 8px; width: 160px; border-radius: 2px; outline: none;
+  }
+  .token-box input:focus { border-color: var(--accent);
+                           box-shadow: 0 0 6px rgba(83,224,180,.3); }
   .dot {
     width: 9px; height: 9px; border-radius: 50%;
     background: var(--accent);
@@ -210,6 +223,10 @@
     <span class="dot" id="refresh-dot"></span>
     <span>自动刷新 <span id="refresh-interval">2s</span> · 上次 <span id="last-fetch">—</span></span>
   </div>
+  <div class="token-box">
+    <label for="api-token">TOKEN</label>
+    <input id="api-token" type="password" placeholder="可选（服务端开启认证时填）" autocomplete="off">
+  </div>
 </header>
 
 <div class="stats" id="stats"></div>
@@ -250,6 +267,17 @@ const $pollErr = document.getElementById("poll-error");
 const $overflow = document.getElementById("overflow-banner");
 const $stale   = document.getElementById("stale-banner");
 const $interval = document.getElementById("refresh-interval");
+const $token    = document.getElementById("api-token");
+
+/* ---------- 可选 token：localStorage 持久化；非空时两处 fetch 附带
+   Authorization: Bearer 头（服务端 API_TOKEN 未开启时该头无害被忽略） ---------- */
+$token.value = localStorage.getItem("tb_api_token") || "";
+$token.addEventListener("input",
+  () => localStorage.setItem("tb_api_token", $token.value.trim()));
+function authHeaders() {
+  const tok = ($token.value || "").trim();
+  return tok ? { "Authorization": "Bearer " + tok } : {};
+}
 
 let tasks = [];
 let reporting = new Set();   // 正在上报中的 "tid:seq"，防止重复点击
@@ -413,7 +441,7 @@ async function fetchTasks() {
   if (fetching) return;
   fetching = true;
   try {
-    const headers = { "Cache-Control": "no-cache" };
+    const headers = { "Cache-Control": "no-cache", ...authHeaders() };
     if (lastEtag) headers["If-None-Match"] = lastEtag;
     const res = await fetch("/api/tasks", { cache: "no-store", headers });
 
@@ -578,7 +606,7 @@ async function concurrentReport(tid, seq) {
     const posts = Array.from({ length: 5 }, () =>
       fetch(`/api/tasks/${encodeURIComponent(tid)}/steps/${encodeURIComponent(seq)}/report`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify(payload),
       }).then(async r => {
         let body = null;

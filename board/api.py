@@ -36,7 +36,9 @@
 #   POST /api/tasks/<tid>/steps/<seq>/report    幂等上报，契约如上
 import collections
 import hashlib
+import hmac
 import logging
+import os
 import threading
 import time
 import uuid
@@ -80,6 +82,45 @@ _rate_hits = {}                        # ip -> deque([timestamp, ...])
 # 多取 1 行判定，经 X-Has-More 响应头告知调用方。
 DEFAULT_LIMIT = 1000
 MAX_LIMIT = 2000
+
+
+# ---------- 可选 token 认证：API_TOKEN 非空时拦截全部 /api 请求 ----------
+# opt-in 口径：未设置 API_TOKEN 时全放行（可信本机环境），只打一次性
+# WARNING（模块级标志防轮询刷屏）；设置后 Bearer token 不匹配一律 401。
+# 钩子位置口径：before_request 先于视图函数体执行 → 认证门天然位于
+# report 限流判定之前：非法请求在认证层即被拒，不消耗限流窗口额度，
+# 防无效 token 洪水耗尽合法客户端配额。比对用 hmac.compare_digest
+# 常量时间比较，防时序侧信道逐字符猜 token。
+_TOKEN_WARNED = False
+
+
+@app.before_request
+def _check_api_token():
+    global _TOKEN_WARNED
+    # 首行路径门：只管 /api；看板静态页与 /healthz 探活不拦
+    if not request.path.startswith("/api"):
+        return None
+    expected = os.environ.get("API_TOKEN") or ""
+    if not expected:
+        # 未设置：放行 + 一次性 WARNING（默认仅适用于可信本机）
+        if not _TOKEN_WARNED:
+            app.logger.warning(
+                "API_TOKEN 未设置：/api 全放行，仅限可信本机环境；"
+                "对外部署必须设置 API_TOKEN 并配合反向代理")
+            _TOKEN_WARNED = True
+        return None
+    auth = request.headers.get("Authorization") or ""
+    scheme, _, token = auth.partition(" ")
+    token = token.strip()
+    # encode 后比较：compare_digest 对 str 要求 ASCII，encode 口径更稳
+    if scheme != "Bearer" or not token or not hmac.compare_digest(
+            token.encode("utf-8"), expected.encode("utf-8")):
+        app.logger.info("auth rejected: remote_addr=%s path=%s",
+                        request.remote_addr, request.path)
+        return jsonify({"error": "authentication required: "
+                                 "provide Authorization: Bearer <token>",
+                        "error_code": "unauthorized"}), 401
+    return None
 
 
 # ---------- 请求级跟踪 id：日志与响应头的关联纽带 ----------

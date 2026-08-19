@@ -649,6 +649,40 @@ def test_list_tasks_pagination_and_invalid_params(client, make_task):
     assert resp.get_json()["error_code"] == "invalid_field"
 
 
+# ---------- ㉒a API_TOKEN 可选认证：未设放行 / 缺 token 401 / 正确 token 通过 ----------
+# 钩子每请求读 os.environ，monkeypatch setenv 即时生效；沿用既有 client fixture，
+# autouse 的限流清账 fixture 同样覆盖本组用例。选不需 DB 的参数校验路径
+# （limit=abc → 400）断言“认证已通过”，避免无库环境 skip。
+
+def test_auth_401_when_token_required_but_missing(client, monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "secret-token")
+    resp = client.get("/api/tasks")
+    assert resp.status_code == 401
+    body = resp.get_json()
+    assert body["error_code"] == "unauthorized"
+    assert "error" in body
+
+
+def test_auth_pass_with_valid_bearer_token(client, monkeypatch):
+    monkeypatch.setenv("API_TOKEN", "secret-token")
+    # 携带正确 token：请求通过认证门进入参数校验段（非法 limit → 400
+    # invalid_field 而非 401，证明未被认证拦截）
+    resp = client.get(
+        "/api/tasks?limit=abc",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "invalid_field"
+
+
+def test_auth_passthrough_when_token_unset(client, monkeypatch):
+    # API_TOKEN 未设置：行为不变，无 token 也直达参数校验段
+    monkeypatch.delenv("API_TOKEN", raising=False)
+    resp = client.get("/api/tasks?limit=abc")
+    assert resp.status_code == 400
+    assert resp.get_json()["error_code"] == "invalid_field"
+
+
 # ---------- ㉒ T5 连接池：归还后隔离级别复位（池默认 reset 兜底） ----------
 
 @needs_db
