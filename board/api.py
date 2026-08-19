@@ -39,9 +39,10 @@ import hashlib
 import os
 import threading
 import time
+import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, g, jsonify, request, send_file
 from werkzeug.exceptions import HTTPException
 
 from board import db, logs, logconf
@@ -79,6 +80,24 @@ _rate_hits = {}                        # ip -> deque([timestamp, ...])
 # 多取 1 行判定，经 X-Has-More 响应头告知调用方。
 DEFAULT_LIMIT = 1000
 MAX_LIMIT = 2000
+
+
+# ---------- 请求级跟踪 id：日志与响应头的关联纽带 ----------
+@app.before_request
+def _assign_request_id():
+    """每个请求生成唯一跟踪 id（uuid4 hex）：
+    logconf.RequestIdFilter 从 flask.g 取它注入每条日志，
+    after_request 再经 X-Request-Id 响应头回给调用方——
+    前端报错时可拿该 id 直接定位服务端对应日志行。"""
+    g.request_id = uuid.uuid4().hex
+
+
+@app.after_request
+def _stamp_request_id(resp):
+    # 无论成败/304/401 都回写；before_request 未走到（如更早阶段
+    # 被拦）时 g 上无值，回退 "-" 保证头恒存在
+    resp.headers["X-Request-Id"] = getattr(g, "request_id", "-")
+    return resp
 
 
 def _rate_limit_allow(ip):
