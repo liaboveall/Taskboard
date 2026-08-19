@@ -27,13 +27,14 @@
 #   无论成功/被拒，app.logger.info 记录一行结构化审计日志。
 #
 # 读路径（GET /api/tasks，T5 增强版）：
-#   每任务含 claim_epoch；step log 含 channel；响应带 ETag（payload sha1），
+#   每任务含 claim_epoch；step log 含 channel；响应带 ETag（payload sha256），
 #   If-None-Match 命中返回 304 空体；可选 keyset 分页 after_id/limit。
 #   连接全部走 db.acquire()（psycopg_pool 连接池）。
 #
 #   GET  /healthz                               池内 SELECT 1 探活 + 池统计
 #   GET  /api/tasks                             任务/步骤/日志快照（轮询）
 #   POST /api/tasks/<tid>/steps/<seq>/report    幂等上报，契约如上
+import collections
 import hashlib
 import os
 import threading
@@ -56,7 +57,9 @@ app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
 
 # ---------- report 端点限流：内存级 per-IP 滑动窗口 ----------
 # 仅管 report（写端点）；读路径轮询不在此列。threading.Lock + dict 实现：
-# ip -> 窗口内请求时间戳列表（monotonic 秒）。超阈值直接 429，不记账。
+# ip -> 窗口内请求时间戳 deque（monotonic 秒，左旧右新）。超阈值直接 429，不记账。
+# deque 而非 list：过期条目从头部弹出是 O(1)（list.pop(0) 是 O(n)），
+# 高并发限流判定不再随窗口内条目数线性劣化。
 # 阈值常量模块级暴露：测试可 monkeypatch 成小值，避免真实等 60s。
 RATE_LIMIT_MAX = 60                    # 窗口内允许的 report 请求数
 # （阈值口径：前端“并发上报×5”一轮即 5 个 POST，演示需支持反复点击与
@@ -65,21 +68,24 @@ RATE_LIMIT_MAX = 60                    # 窗口内允许的 report 请求数
 RATE_LIMIT_WINDOW_SECONDS = 60         # 滑动窗口长度（秒）
 _RATE_SWEEP_AT = 1024                  # dict 超过该规模时顺带全量清扫过期条目
 _rate_lock = threading.Lock()
-_rate_hits = {}                        # ip -> [timestamp, ...]
+_rate_hits = {}                        # ip -> deque([timestamp, ...])
 
 
 def _rate_limit_allow(ip):
     """滑动窗口判定：窗口内请求数 < RATE_LIMIT_MAX 则记账放行，否则拒绝。
-    每次调用先修剪本 IP 的过期条目；条目表过大时全量清扫，防无界增长。"""
+    每次调用先修剪本 IP 的过期条目（deque 头部 popleft，O(1)）；
+    条目表过大时全量清扫，防无界增长。"""
     now = time.monotonic()
     cutoff = now - RATE_LIMIT_WINDOW_SECONDS
     with _rate_lock:
         if len(_rate_hits) > _RATE_SWEEP_AT:
+            # 全量清扫：空窗或最后一条时间戳已过期即整体作废。
+            # deque 支持 v[-1] 下标访问（O(n)，仅清扫路径使用，不影响热路径）。
             for k in [k for k, v in _rate_hits.items() if not v or v[-1] <= cutoff]:
                 del _rate_hits[k]
-        hits = _rate_hits.setdefault(ip, [])
+        hits = _rate_hits.setdefault(ip, collections.deque())
         while hits and hits[0] <= cutoff:
-            hits.pop(0)
+            hits.popleft()
         if len(hits) >= RATE_LIMIT_MAX:
             return False
         hits.append(now)
@@ -90,6 +96,28 @@ def _reset_rate_limit():
     """测试钩子：清空限流记账，保证用例间互不干扰。"""
     with _rate_lock:
         _rate_hits.clear()
+
+
+def _etag_match(if_none_match, etag):
+    """RFC 7232 口径的 If-None-Match 匹配（命中即 304）：
+      - `*` 表示匹配任意当前表示 → 直接命中；
+      - 多个候选逗号分隔，任一命中即命中；
+      - 忽略弱校验前缀 W/ 后参与比对（304 语义是“无需重传”，
+        强弱之分不影响省带宽目标；前缀与候选间空白一并容忍）；
+      - 与带引号形态及 strip('"') 裸摘要形态做强比对
+        （兼容不发引号、裸贴摘要的客户端）。"""
+    if not if_none_match:
+        return False
+    bare = etag.strip('"')
+    for cand in if_none_match.split(","):
+        cand = cand.strip()
+        if cand == "*":
+            return True
+        if cand.startswith("W/"):
+            cand = cand[2:].strip()
+        if cand in (etag, bare):
+            return True
+    return False
 
 
 def _iso(ts):
@@ -216,12 +244,13 @@ def list_tasks():
         })
 
     resp = jsonify(tasks)
-    # ETag：对最终 JSON payload 计 sha1 摘要。前端轮询携带 If-None-Match，
-    # 命中即 304 空体，省带宽与前端重渲染（前端手动携带，不依赖浏览器缓存语义）。
+    # ETag：对最终 JSON payload 计 sha256 摘要（sha1 已不再视为抗碰撞安全，
+    # 摘要长度对省带宽目标无实质影响，直接用更稳的 sha256）。
+    # 前端轮询携带 If-None-Match，命中即 304 空体，省带宽与前端重渲染
+    # （前端手动携带，不依赖浏览器缓存语义；匹配口径见 _etag_match）。
     payload = resp.get_data()
-    etag = '"' + hashlib.sha1(payload).hexdigest() + '"'
-    if_none_match = (request.headers.get("If-None-Match") or "").strip()
-    if if_none_match and if_none_match in (etag, etag.strip('"')):
+    etag = '"' + hashlib.sha256(payload).hexdigest() + '"'
+    if _etag_match(request.headers.get("If-None-Match"), etag):
         not_modified = app.response_class(status=304)
         not_modified.headers["ETag"] = etag
         return not_modified
