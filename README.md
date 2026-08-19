@@ -57,14 +57,29 @@ seed 默认非破坏（只在空库播种）；`--reset` 显式清库重建。�
 
 ```mermaid
 stateDiagram-v2
+    direction LR
+
+    state "待认领<br/>pending" as pending
+    state "已认领<br/>claimed" as claimed
+    state "执行中<br/>running" as running
+    state "已完成<br/>done" as done
+    state "失败 / 死信<br/>failed" as failed
+    state retry_gate <<choice>>
+
     [*] --> pending
-    pending --> claimed : claim_next（SKIP LOCKED）
-    claimed --> running : 开始执行
-    claimed --> pending : release 归还 / 租约超期回收
-    running --> pending : 租约超期回收
-    running --> done : 全部 step 成功
-    claimed --> failed : 起步异常 / 达重试上限
-    running --> failed : step 失败 / 达重试上限
+    pending --> claimed : 原子认领<br/>SKIP LOCKED
+    claimed --> running : CAS 启动
+    running --> done : 执行流程完成<br/>含空任务
+
+    claimed --> pending : 主动释放
+    claimed --> failed : claimed 态异常（兜底）
+    running --> failed : worker 执行异常
+
+    claimed --> retry_gate : 租约超期
+    running --> retry_gate : 租约超期
+    retry_gate --> pending : 未达重试上限
+    retry_gate --> failed : 达到重试上限
+
     done --> [*]
     failed --> [*]
 ```
