@@ -185,3 +185,38 @@ def test_group_and_step_inputs_not_mutated():
     resolve({"a": 1}, group, steps)
     assert group == {"g": {"nested": 1}}
     assert steps == [{"s": {"nested": 2}}]
+
+
+# ---------- 类型防御：脏数据在入口炸响（覆盖全部四个防御分支） ----------
+
+def test_base_type_error():
+    # 分支 1：base 非 dict → TypeError 且带类型上下文
+    with pytest.raises(TypeError, match=r"base must be dict, got str"):
+        resolve("not-a-dict", {}, [{}])
+
+
+def test_group_override_type_error():
+    # 分支 2：group_override 非 dict → TypeError（即使 base 合法）
+    with pytest.raises(TypeError, match=r"group_override must be dict, got list"):
+        resolve({"a": 1}, ["not-a-dict"], [{}])
+
+
+def test_step_overrides_type_error():
+    # 分支 3：step_overrides 非 list → TypeError
+    with pytest.raises(TypeError, match=r"step_overrides must be list, got dict"):
+        resolve({"a": 1}, {}, {"a": 2})
+
+
+def test_step_overrides_element_type_error():
+    # 分支 4：step_overrides 内元素非 dict → TypeError 且带下标定位
+    with pytest.raises(TypeError, match=r"step_overrides\[1\] must be dict, got str"):
+        resolve({"a": 1}, {}, [{}, "not-a-dict"])
+
+
+def test_type_check_happens_before_merge():
+    # 防御在合并之前：脏数据不应产生任何副作用（快照列表从未被构造返回），
+    # 且合法入参不被脏分支误伤
+    with pytest.raises(TypeError):
+        resolve(None, {}, [{}])
+    snaps = resolve({"a": 1}, {}, [{}])
+    assert snaps == [{"a": 1}]
