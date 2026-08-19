@@ -14,8 +14,10 @@
 #   body（可选键）：
 #     expected_owner   str  —— 有主任务（claimed_by 非 NULL）必填；与实际
 #                             持有者比对，不匹配 409 owner_mismatch
-#     expected_epoch   int  —— 有主任务可选围栏；与 tasks.claim_epoch 比对，
-#                             不匹配 409 epoch_mismatch（bool 不算整数）
+#     expected_epoch   int|str —— 有主任务可选围栏；接受 int（bool 拒收）或
+#                             纯十进制数字字符串（GET 已把 claim_epoch
+#                             字符串化，前端原样透传），归一化 int 后与
+#                             tasks.claim_epoch 比对，不匹配 409 epoch_mismatch
 #     force            bool —— 严格 True 时为人工干预逃生门：一并豁免
 #                             owner/epoch 与序号门三重校验（【不】豁免状态门），
 #                             必写结构化审计日志
@@ -27,8 +29,10 @@
 #   无论成功/被拒，app.logger.info 记录一行结构化审计日志。
 #
 # 读路径（GET /api/tasks，T5 增强版）：
-#   每任务含 claim_epoch；step log 含 channel；响应带 ETag（payload sha256），
-#   If-None-Match 命中返回 304 空体；可选 keyset 分页 after_id/limit。
+#   每任务含 claim_epoch（输出时字符串化：bigint 可能超过 JS Number 的
+#   2^53 安全整数边界，字符串透传才能无损往返）；step log 含 channel；
+#   响应带 ETag（payload sha256），If-None-Match 命中返回 304 空体；
+#   可选 keyset 分页 after_id/limit。
 #   连接全部走 db.acquire()（psycopg_pool 连接池）。
 #
 #   GET  /healthz                               池内 SELECT 1 探活 + 池统计
@@ -39,6 +43,7 @@ import hashlib
 import hmac
 import logging
 import os
+import re
 import threading
 import time
 import uuid
@@ -298,8 +303,11 @@ def list_tasks():
             "status": status,
             "claimed_by": claimed_by,
             "current_step": current_step,
-            # 围栏 token 审计列：前端可据此构造 expected_epoch 防陈旧页误报
-            "claim_epoch": claim_epoch,
+            # 围栏 token 审计列：前端可据此构造 expected_epoch 防陈旧页误报。
+            # 字符串化输出：claim_epoch 是 PG bigint，单调递增无上限，可能超过
+            # JS Number 的 2^53 安全整数边界（JSON 数字往返丢精度）；
+            # 字符串透传无损，前端原样回传、服务端归一化 int 后比对。
+            "claim_epoch": str(claim_epoch),
             "base_params": base_params or {},
             "steps": steps,
             # 该任务已有日志的 step 数
@@ -450,21 +458,31 @@ def report(tid, seq):
             #    与 FOR UPDATE 读到的实际值比对；可选 expected_epoch 与
             #    claim_epoch 比对 —— 防御陈旧页面对已换主/已重认领任务的误报。
             #    类型错误一律 400（消灭静默跳过）：expected_owner 必须字符串，
-            #    expected_epoch 必须整数（bool 不算）；force 的类型校验已前置到
-            #    序号门之前（见上方注释）。
+            #    expected_epoch 必须整数或纯数字字符串（bool 不算，字符串归一化
+            #    int 后比对）；force 的类型校验已前置到序号门之前（见上方注释）。
             expected_owner = body.get("expected_owner")
             if expected_owner is not None and not isinstance(expected_owner, str):
                 return reject({"error": "expected_owner must be a string",
                                "error_code": "expected_owner_invalid"},
                               400, "expected_owner_invalid")
             expected_epoch = body.get("expected_epoch")
+            # 双入参兼容（claim_epoch 字符串化的配套放宽）：接受 int（bool 拒收）
+            # 或纯十进制数字字符串（^\d+$，GET 字符串化后前端原样透传的形态）；
+            # 其余类型一律 400，消灭静默跳过。
             if expected_epoch is not None and not (
-                isinstance(expected_epoch, int) and not isinstance(expected_epoch, bool)
+                (isinstance(expected_epoch, int)
+                 and not isinstance(expected_epoch, bool))
+                or (isinstance(expected_epoch, str)
+                    and re.fullmatch(r"\d+", expected_epoch))
             ):
-                return reject({"error": "expected_epoch must be an integer "
+                return reject({"error": "expected_epoch must be an integer or a "
+                                        "decimal-digit string "
                                         "(boolean is not accepted)",
                                "error_code": "invalid_field"},
                               400, "invalid_field")
+            # 归一化：字符串形态转 int，下方与库内 bigint 直接比对
+            if isinstance(expected_epoch, str):
+                expected_epoch = int(expected_epoch)
 
             if force is True:
                 # 逃生门：豁免序号门（上方）与 owner/epoch 校验（本门）。允许
@@ -486,10 +504,12 @@ def report(tid, seq):
                                    "claimed_by": claimed_by},
                                   409, "owner_mismatch")
                 if expected_epoch is not None and expected_epoch != claim_epoch:
+                    # 回带库内 epoch 同样字符串化：与 GET 输出口径一致，
+                    # 前端拿到即可直接比对/展示，无 2^53 精度风险
                     return reject({"error": f"epoch mismatch: expected {expected_epoch} "
                                             f"but task {tid} claim_epoch is {claim_epoch}",
                                    "error_code": "epoch_mismatch",
-                                   "claim_epoch": claim_epoch},
+                                   "claim_epoch": str(claim_epoch)},
                                   409, "epoch_mismatch")
             # 无主任务（claimed_by IS NULL）豁免 owner/epoch 校验。
             # 注：此处【不】提前 commit —— 状态门的行锁必须保持到

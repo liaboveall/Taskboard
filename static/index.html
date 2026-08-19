@@ -523,10 +523,12 @@ function buildReportPayload(t) {
   // 回收后重认领）时后端 409 拒绝，避免把误报写进新主的日志。
   // 口径：任务无主（claimed_by=null）时两字段均不附带；
   //       claimed_by 非 null 时 expected_owner 必附、expected_epoch 仅在
-  //       claim_epoch 为整数时附带（与后端"给了才校验"一致）。
+  //       claim_epoch 为纯数字字符串形态时附带（后端 GET 已字符串化输出，
+  //       防 bigint 超 JS 2^53 安全整数边界；字符串原样透传，后端归一化
+  //       int 后比对，与后端“给了才校验”一致）。
   if (t && t.claimed_by != null) {
     payload.expected_owner = t.claimed_by;
-    if (Number.isInteger(t.claim_epoch)) payload.expected_epoch = t.claim_epoch;
+    if (/^\d+$/.test(String(t.claim_epoch))) payload.expected_epoch = t.claim_epoch;
   }
   return payload;
 }
