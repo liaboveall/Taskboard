@@ -26,6 +26,8 @@ docker compose up --build          # postgres healthy → seed 播种 → api he
 - **容器内全量测试**（含 slow 攻击用例与覆盖率，conftest 自动建 taskboard_test 隔离库）：
   `docker compose --profile test run --rm testrunner`
 - **收尾**：`docker compose down`（默认保留命名 volume pgdata；`down -v` 连库一起清）。
+- **数据生命周期**：seed 缺省模式非破坏——首次 up 播种 3 任务基线，后续 up
+  保留已有数据（含注入的批量任务），重建容器不清库；仅 `down -v` 清库。
 - 容器配置纪律：环境变量统一由 compose 注入（x-app-env 锚点），不挂载宿主机 .env；
   容器 PG 只在 compose 内网暴露（不映射端口），与宿主机 PostgreSQL 互不干扰。
   容器演示默认不设 API_TOKEN（无认证，仅本机映射）；需开启时在 api 服务的
@@ -77,13 +79,16 @@ docker compose up --build          # postgres healthy → seed 播种 → api he
 - **对外暴露前提**：见下方「信任边界」（设 `API_TOKEN` + HTTPS 反代）。
 
 ### 部署形态取舍（裸机 watchdog vs 容器 compose）
-两种形态**并存不互斥，边界清晰**：
-- **容器形态**：生命周期管理交给 compose restart 策略（api/worker/postgres `unless-stopped`，seed 一次性 `restart: "no"`）——容器编排层天然具备“退出即重拉”，watchdog 的指数退避在这里是重复建设，故 **watchdog 不进容器**。
+两种形态**并存可切换，边界清晰**；但注意互斥点：两形态共享宿主机
+127.0.0.1:5000，**不可同时运行**——切换时先 `docker compose down` 再起裸机，
+或先停裸机进程再 `docker compose up`。
+- **容器形态**：生命周期管理交给 compose restart 策略（api/worker/postgres `unless-stopped`，seed 一次性 `restart: on-failure`）——容器编排层天然具备“退出即重拉”，watchdog 的指数退避在这里是重复建设，故 **watchdog 不进容器**。
 - **裸机形态**：无编排层时 watchdog 就是进程守护本体，保留原样（含退避与 rc=0 停止态语义）。
 - 两形态共用的不变量：任务级容错永远靠租约 + reaper（worker 主循环），与进程守护方式无关——守护只保进程活着，被收割任务的回收不依赖它。这也呼应项目零中间件哲学：正确性下沉到 PostgreSQL 行锁与唯一约束，部署形态只决定“谁来重启进程”，不引入任何新的协调组件。
 
 ## 信任边界
 - 默认仅监听 127.0.0.1：未出本机即视为可信，未设 `API_TOKEN` 时 `/api` 全放行（首个 /api 请求时打一次性 WARNING 提示该口径）。
+- **容器形态例外**：容器内进程经 `API_HOST=0.0.0.0` 绑全网卡（宿主机端口映射能触达的硬前提），“不出本机”改由 compose 仅映射 `127.0.0.1:5000` 保证；且 compose 内网内可无 token 直达 api，放开对外映射前必须先设 `API_TOKEN` + HTTPS 反代。
 - 设置 `API_TOKEN` 环境变量后，`/api` 全部请求必须携带 `Authorization: Bearer <token>`，`hmac.compare_digest` 常量时间比对，不匹配一律 401（error_code=unauthorized）；认证门位于限流之前，无效 token 不消耗限流配额。
 - 看板静态页与 `/healthz` 探活不受认证拦截。
 - 对外部署必须：设置 `API_TOKEN` + HTTPS 反向代理（token 为明文 Bearer，无 TLS 不得裸露）；本项目不内置多用户/权限体系。

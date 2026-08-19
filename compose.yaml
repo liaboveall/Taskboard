@@ -27,7 +27,10 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U taskboard -d taskboard"]
+      # 强制走 TCP（-h 127.0.0.1）：首次 initdb 期间 postgres 会起临时服务器
+      # 只监听 unix socket，不带 -h 的 pg_isready 会对它误判 healthy，导致
+      # 依赖方在真正的服务器就绪前抢先连接而失败。
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U taskboard -d taskboard"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -36,15 +39,16 @@ services:
   seed:
     build: .
     image: taskboard-app
-    # --force = --reset 的历史别名且跳过交互确认：容器无 tty，裸 --reset 会
-    # 卡在 input() 确认上（stdin 为 /dev/null 时直接 EOFError），必须用 --force。
-    # 语义：DROP 四表 → schema.sql → 播种 3 任务演示数据（幂等可重复 up）。
-    command: ["python", "-m", "board.seed", "--force"]
+    # 缺省非破坏模式：CREATE IF NOT EXISTS 建 schema + 仅空库才播种 +
+    # schema 版本断言，无 input() 交互，容器无 tty 也安全；重建不清数据。
+    command: ["python", "-m", "board.seed"]
     environment: *app-env
     depends_on:
       postgres:
         condition: service_healthy
-    restart: "no"
+    # on-failure 自愈：与 postgres 的连接竞态（healthy 判定与可连之间的
+    # 窗口）失败时自动重试，避免 api 永久挂在 service_completed_successfully。
+    restart: on-failure
 
   api:
     build: .

@@ -10,9 +10,9 @@
   "service": "dev",
   "workspaceFolder": "/workspaces/taskboard",
 
-  // 看板端口转发：api 由 compose 映射到宿主机 127.0.0.1:5000；
+  // 看板访问：宿主机靠 api 服务的 127.0.0.1:5000 端口映射；
   // 容器网络内也可直接用服务名访问 http://api:5000。
-  "forwardPorts": [5000],
+  // （dev 容器自身不监听 5000，故不配 forwardPorts。）
 
   // 运行镜像已含 dev 依赖（见 Dockerfile 头注释取舍）；此处做一次
   // user 级补装兜底（已满足时秒过），并打印版本留痕。
