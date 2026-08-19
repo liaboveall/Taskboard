@@ -41,10 +41,16 @@ createdb taskboard && copy .env.example .env      # 在 .env 填入 DATABASE_URL
 - step_index 可不连续，按真实序号上报。
 
 ## 测试
-- pytest 102 用例全绿（params 25 / api 34 / recovery 21 / 其余 22）。
-- 多进程并发攻击测试 PASS（duplicate_claims=0）。
+- 本地默认：`pytest`（pyproject addopts 含 `-m "not slow"`，自动排除分钟级的多进程攻击用例）；无 PostgreSQL 环境时 DB 用例自动 skip、纯逻辑用例照跑，终端会打印醒目的"假绿警告"。
+- CI 全量：GitHub Actions（.github/workflows/ci.yml）起 postgres:14 service + `TB_STRICT_DB=1`（隔离库供给失败大声 fail），`pytest -m ""` 覆盖默认 marker 排除、全量含 slow 攻击用例（`tests/test_attack_claim.py` subprocess 调 `scripts/attack_claim.py`）；覆盖率 `--cov=board --cov-report=term-missing` 首跑只出报告不卡门禁（不设 fail-under，待基线实测后回填）。
+- 演示/取证脚本已归位 `scripts/`（e2e_prep / seed_demo_bulk / reaper_demo / attack_claim），`tests/` 只留 pytest 用例。
 - 看板 E2E 验证：并发 5 次上报全去重、竞速失败如实渲染。
 - 更多验证细节见 COLLAB.md。
+
+## 部署
+- **生产启动（waitress）**：`.venv\Scripts\python.exe -m board.api` 自动以 `waitress.serve` 提供（线程数 `TB_WSGI_THREADS` 可覆盖，默认 8）；waitress 缺失时回退 werkzeug `app.run`（debug 关闭）并打 WARNING 提示非生产级。选型理由：gunicorn 不支持 Windows（本项目演示/部署环境以 Windows 为主）；waitress 是纯 Python 单进程多线程 WSGI 服务器，与项目内 threading.Lock 限流、模块级状态的进程内语义一致——多进程部署会分裂限流计数等进程内状态，需下沉到反向代理层解决，故不内置多进程方案。
+- **守护拉起链路（watchdog）**：`.venv\Scripts\python.exe watchdog.py` 守护 api + worker W1/W2：子进程退出即按策略重拉——非 0 退出按 3s→6s→12s→30s 指数退避（防配置性故障触发重启风暴），rc=0 优雅退出置停止态不再拉起；职责边界只管进程存活，被收割任务的回收由 worker 主循环的租约 reaper 负责。建议用 WMI（Win32_Process.Create）启动 watchdog 使其脱离 shell 进程树。
+- **对外暴露前提**：见下方「信任边界」（设 `API_TOKEN` + HTTPS 反代）。
 
 ## 信任边界
 - 默认仅监听 127.0.0.1：未出本机即视为可信，未设 `API_TOKEN` 时 `/api` 全放行（首个 /api 请求时打一次性 WARNING 提示该口径）。
