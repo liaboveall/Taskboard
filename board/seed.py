@@ -21,7 +21,7 @@ from board import db
 
 # 当前 schema 版本（与 schema.sql 末尾的登记值一致）：
 # seed 启动时断言 schema_meta 版本，防止漏迁移的旧库静默运行。
-EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_SCHEMA_VERSION = 3
 
 # 破坏性重建的 DROP 顺序：先子表后父表，规避外键依赖
 DROP_ORDER = ["step_logs", "steps", "tasks", "task_groups"]

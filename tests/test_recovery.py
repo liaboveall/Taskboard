@@ -341,6 +341,65 @@ def test_reclaim_null_claimed_at_dirty_row(conn, make_task):
     assert (status, claimed_by, claimed_at) == ("pending", None, None)
 
 
+# ---------- 死信机制（schema v3）：重试达上限置 failed / 未达上限回 pending ----------
+
+def test_reclaim_dead_letter_when_retries_exhausted(conn, make_task):
+    """retry_count 预置为 max_retries-1 的过期任务：回收时 retry_count+1
+    恰好触顶 → 进死信（置 failed）而非回 pending；终态打点 finished_at
+    非空；后续再跑 reaper 不会把它重新排回队列。"""
+    tid = make_task(
+        status="running", claimed_by="W-dead",
+        claimed_at_sql="now() - interval '120 seconds'",
+    )
+    # 预置重试计数到临界值（回填数据而非 sleep，防 flaky 铁律同口径）
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE tasks SET retry_count = max_retries - 1 WHERE id = %s",
+            (tid,),
+        )
+    conn.commit()
+
+    recovered = claim.reclaim_expired(conn, 60)
+    assert tid in recovered
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT status, retry_count, max_retries, claimed_by, claimed_at "
+            "FROM tasks WHERE id = %s", (tid,),
+        )
+        status, retry_count, max_retries, claimed_by, claimed_at = cur.fetchone()
+    assert status == "failed"                    # 死信：不再回 pending
+    assert retry_count == max_retries            # 重试计数触顶
+    assert claimed_by is None and claimed_at is None  # 认领信息照常清空
+    assert _finished_at(conn, tid) is not None   # 终态打点
+
+    # 终态行不再命中 reaper 谓词：重跑回收不会再碰它
+    assert tid not in claim.reclaim_expired(conn, 60)
+
+
+def test_reclaim_below_retry_limit_returns_pending(conn, make_task):
+    """未达重试上限的过期任务：照常回 pending 且 retry_count 记账 +1，
+    finished_at 保持 NULL（非终态不打点）。"""
+    tid = make_task(
+        status="claimed", claimed_by="W-dead",
+        claimed_at_sql="now() - interval '120 seconds'",
+    )
+    # 预置 1 次重试（低于默认上限 3）
+    with conn.cursor() as cur:
+        cur.execute("UPDATE tasks SET retry_count = 1 WHERE id = %s", (tid,))
+    conn.commit()
+
+    recovered = claim.reclaim_expired(conn, 60)
+    assert tid in recovered
+
+    status, claimed_by, claimed_at = _task_state(conn, tid)
+    assert (status, claimed_by, claimed_at) == ("pending", None, None)
+    with conn.cursor() as cur:
+        cur.execute("SELECT retry_count FROM tasks WHERE id = %s", (tid,))
+        assert cur.fetchone()[0] == 2  # 回收一次记账 +1
+    assert _finished_at(conn, tid) is None  # 非终态不打点
+
+
 # ---------- ⑨ release 正反例：只有当前持有者能释放 ----------
 
 def test_release_only_owner_succeeds(conn, make_task):

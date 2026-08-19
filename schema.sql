@@ -1,4 +1,4 @@
--- schema.sql —— 任务调度系统核心表结构（schema 版本 2）
+-- schema.sql —— 任务调度系统核心表结构（schema 版本 3）
 -- 非破坏性可重复执行总原则：CREATE TABLE/INDEX IF NOT EXISTS + ADD COLUMN
 -- IF NOT EXISTS + 幂等 DO 块，对"全新库"与"旧库"重复执行结果一致。
 -- 旧库升级路径由文件末尾的迁移段覆盖：补审计列、step_logs→steps 复合外键
@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS task_groups (
 
 -- 任务：status 状态机 pending -> claimed -> running -> done/failed
 -- current_step CHECK >= 1：step 编号与 steps 表口径统一，禁止 0/负数的幽灵步号；
+-- retry_count/max_retries（schema 版本 3 死信机制）：reaper 每次回收
+-- retry_count +1，retry_count >= max_retries 时不再回 pending 而是置
+-- failed（死信），防止必然失败的任务被无限重试霸占队列。
 -- finished_at：done/failed 翻转时由 transition() 打点，预留终态打点，
 -- 供排查/审计查询，当前看板未展示。
 -- claim_epoch：单调认领代数——每次认领 +1、回收不清零。这是围栏对
@@ -38,6 +41,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     claimed_by   text,
     claimed_at   timestamptz,
     claim_epoch  bigint NOT NULL DEFAULT 0,
+    retry_count  int NOT NULL DEFAULT 0,
+    max_retries  int NOT NULL DEFAULT 3,
     current_step int NOT NULL DEFAULT 1 CHECK (current_step >= 1),
     created_at   timestamptz NOT NULL DEFAULT now(),
     finished_at  timestamptz
@@ -92,7 +97,7 @@ CREATE INDEX IF NOT EXISTS idx_tasks_lease
 -- 先按 id 或 status 定位到个位数行后再校验 claimed_by）。
 
 -- ============================================================
--- 旧库升级路径（schema 版本 1 -> 2）：以下全部幂等，可重复执行。
+-- 旧库升级路径（schema 版本 1 -> 2 -> 3）：以下全部幂等，可重复执行。
 -- ============================================================
 
 -- 补列：为旧结构库补齐审计列与既有历史列（ADD COLUMN IF NOT EXISTS 幂等，
@@ -101,6 +106,10 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS finished_at timestamptz;
 ALTER TABLE step_logs ADD COLUMN IF NOT EXISTS error_message text;
 -- claim_epoch 为旧库补列（认领+1、回收不清零的单调围栏令牌）
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS claim_epoch bigint NOT NULL DEFAULT 0;
+-- schema 版本 3 死信机制两列：retry_count（已重试次数，存量行回填默认 0）
+-- 与 max_retries（重试上限，默认 3）；NOT NULL + DEFAULT 无存量回填风险。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_count int NOT NULL DEFAULT 0;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS max_retries int NOT NULL DEFAULT 3;
 -- schema 版本 2 审计三列
 ALTER TABLE step_logs ADD COLUMN IF NOT EXISTS channel text CHECK (channel IN ('worker','manual'));
 ALTER TABLE step_logs ADD COLUMN IF NOT EXISTS claim_epoch bigint;
@@ -175,6 +184,7 @@ BEGIN
         )';
     END IF;
     INSERT INTO schema_meta (version) VALUES (2) ON CONFLICT DO NOTHING;
+    INSERT INTO schema_meta (version) VALUES (3) ON CONFLICT DO NOTHING;
 END $$;
 
 -- schema 版本登记表：每次 schema 变更递增版本号；seed 启动断言当前版本，
@@ -183,5 +193,7 @@ CREATE TABLE IF NOT EXISTS schema_meta (
     version    int PRIMARY KEY,
     applied_at timestamptz NOT NULL DEFAULT now()
 );
--- 当前 schema 版本 = 2（本计划定义）；ON CONFLICT DO NOTHING 保证幂等登记。
+-- 当前 schema 版本 = 3（本计划定义）；ON CONFLICT DO NOTHING 保证幂等登记。
+-- v2/v3 两行均登记：版本登记表按行留存升级轨迹，seed 断言取 max(version)。
 INSERT INTO schema_meta (version) VALUES (2) ON CONFLICT DO NOTHING;
+INSERT INTO schema_meta (version) VALUES (3) ON CONFLICT DO NOTHING;

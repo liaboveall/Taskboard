@@ -147,10 +147,21 @@ def transition(conn, task_id, from_status, to_status, claimed_by=None, claim_epo
 
 
 def reclaim_expired(conn, lease_seconds):
-    """reaper：回收租约过期的任务，回到 pending 重新排队。
+    """reaper：回收租约过期的任务，回到 pending 重新排队（达重试上限则进死信）。
 
     单条原子 UPDATE：claimed_at 过期（或 claimed_at=NULL 的脏数据）的
-    claimed/running 任务置回 pending 并清空认领信息。
+    claimed/running 任务清空认领信息并置回 pending；但重试计数达上限的
+    任务不再重排队，而是置 failed 进入死信。
+
+    死信语义（schema v3，retry_count/max_retries）：
+      - 每次回收 retry_count 累加 1（重试记账，与 claim_epoch 同为回收不清零）；
+      - retry_count + 1 >= max_retries → status 置 'failed' 并打点
+        finished_at（终态口径与 transition 一致）：必然失败的任务
+        不再被无限重试霸占队列，留待人工排查；
+      - 未达上限 → status 置 'pending'，finished_at 保持列不动
+        （claimed/running 态本无终态打点，语义上恒为 NULL）。
+      - RETURNING id 带回全部被回收的任务（含进死信的），语义不变。
+
     注意【回收不清 claim_epoch】：SET 只清 status/claimed_by/claimed_at，
     epoch 保留累加值 —— 否则"回收后重认领"会让旧 worker 的过期 epoch
     与新代碰巧一致，围栏失效。
@@ -187,7 +198,12 @@ def reclaim_expired(conn, lease_seconds):
         return []
     sql = """
         UPDATE tasks
-           SET status='pending', claimed_by=NULL, claimed_at=NULL
+           SET retry_count = tasks.retry_count + 1,
+               status = CASE WHEN tasks.retry_count + 1 >= tasks.max_retries
+                             THEN 'failed' ELSE 'pending' END,
+               finished_at = CASE WHEN tasks.retry_count + 1 >= tasks.max_retries
+                                  THEN now() ELSE finished_at END,
+               claimed_by=NULL, claimed_at=NULL
          WHERE status IN ('claimed','running')
            AND COALESCE(claimed_at, '-infinity'::timestamptz)
                < now() - make_interval(secs => %s)
