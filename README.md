@@ -95,6 +95,6 @@ stateDiagram-v2
 ## 砍掉清单
 连接池、回收后断点续跑、嵌套深合并、WebSocket、迁移框架——均为与本规模不匹配或刻意取舍，逐项理由见 COLLAB.md。（鉴权已以 opt-in `API_TOKEN` 形式补齐。）
 
-## 细则索引（README 保持一页，深度内容下沉）
+## 细则索引
 - 部署形态取舍 / 信任边界细则 / API 契约变更声明 / Docker 详命令与数据生命周期 / 目录约定 → [docs/operations.md](docs/operations.md)
 - 验证细节 / 历轮修复清单 / AI 纠错案例 → [COLLAB.md](COLLAB.md)
