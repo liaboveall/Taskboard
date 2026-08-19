@@ -70,6 +70,16 @@ _RATE_SWEEP_AT = 1024                  # dict 超过该规模时顺带全量清�
 _rate_lock = threading.Lock()
 _rate_hits = {}                        # ip -> deque([timestamp, ...])
 
+# ---------- 读路径分页上限：防大表全量快照拖垮看板与 DB ----------
+# 阈值口径（与 RATE_LIMIT_MAX 同为模块级常量，测试可 monkeypatch）：
+# 演示/单机部署任务量级千以内，DEFAULT_LIMIT=1000 留足余量；
+# MAX_LIMIT=2000 封顶显式请求，防客户端传大 limit 把单次快照打爆。
+# 缺省不传 limit 即取 DEFAULT_LIMIT；显式传入超 MAX_LIMIT 夹紧不报错
+# （宽容口径：分页是优化参数，越界不构成语义错误）。超页与否由
+# 多取 1 行判定，经 X-Has-More 响应头告知调用方。
+DEFAULT_LIMIT = 1000
+MAX_LIMIT = 2000
+
 
 def _rate_limit_allow(ip):
     """滑动窗口判定：窗口内请求数 < RATE_LIMIT_MAX 则记账放行，否则拒绝。
@@ -134,10 +144,12 @@ def index():
 # ---------- GET /api/tasks ：快照读，供前端轮询（支持 ETag/分页） ----------
 @app.get("/api/tasks")
 def list_tasks():
-    # 可选 keyset 分页：after_id（int）与 limit（int，默认不限）。
-    # 不带参数时行为与现状完全一致；非法值一律 400 invalid_field（不静默）。
+    # keyset 分页：after_id（int）可选；limit（int）缺省 DEFAULT_LIMIT、
+    # 显式超 MAX_LIMIT 夹紧不报错；非法值一律 400 invalid_field（不静默）。
+    # limit 恒有值 → 读路径统一走分页分支：steps/step_logs 收敛到本页
+    # 任务集，输出 JSON 结构不变。
     after_id = 0
-    limit = None
+    limit = DEFAULT_LIMIT
     after_id_raw = request.args.get("after_id")
     if after_id_raw is not None:
         try:
@@ -154,7 +166,8 @@ def list_tasks():
         if limit is None or limit < 1:
             return jsonify({"error": "limit must be a positive integer",
                             "error_code": "invalid_field"}), 400
-    paginated = after_id_raw is not None or limit_raw is not None
+        if limit > MAX_LIMIT:
+            limit = MAX_LIMIT  # 显式超限：夹紧到封顶值，不报错
 
     with db.acquire() as conn:
         # 单快照一致读：三条 SELECT 包进同一 REPEATABLE READ 事务，
@@ -166,45 +179,35 @@ def list_tasks():
                 task_sql = ("SELECT id, status, claimed_by, current_step, "
                             "claim_epoch, base_params FROM tasks")
                 task_args = []
-                if paginated:
+                if after_id_raw is not None:
                     # keyset 分页：WHERE id > after_id ORDER BY id LIMIT limit
                     task_sql += " WHERE id > %s"
                     task_args.append(after_id)
                 task_sql += " ORDER BY id"
-                if limit is not None:
-                    task_sql += " LIMIT %s"
-                    task_args.append(limit)
+                # 多取 1 行判定 has_more：返回行数 > limit 即还有下一页
+                task_sql += " LIMIT %s"
+                task_args.append(limit + 1)
                 cur.execute(task_sql, task_args)
                 task_rows = cur.fetchall()
-                if paginated:
-                    # 分页时 steps/step_logs 收敛到分页任务集，不拉全表
-                    task_ids = [r[0] for r in task_rows]
-                    cur.execute(
-                        "SELECT task_id, step_index, override_params "
-                        "FROM steps WHERE task_id = ANY(%s) "
-                        "ORDER BY task_id, step_index",
-                        (task_ids,),
-                    )
-                    step_rows = cur.fetchall()
-                    cur.execute(
-                        "SELECT task_id, step_index, success, reported_at, "
-                        "worker_id, error_message, channel "
-                        "FROM step_logs WHERE task_id = ANY(%s)",
-                        (task_ids,),
-                    )
-                    log_rows = cur.fetchall()
-                else:
-                    cur.execute(
-                        "SELECT task_id, step_index, override_params "
-                        "FROM steps ORDER BY task_id, step_index"
-                    )
-                    step_rows = cur.fetchall()
-                    cur.execute(
-                        "SELECT task_id, step_index, success, reported_at, "
-                        "worker_id, error_message, channel "
-                        "FROM step_logs"
-                    )
-                    log_rows = cur.fetchall()
+                has_more = len(task_rows) > limit
+                if has_more:
+                    task_rows = task_rows[:limit]
+                # steps/step_logs 收敛到分页任务集，不拉全表
+                task_ids = [r[0] for r in task_rows]
+                cur.execute(
+                    "SELECT task_id, step_index, override_params "
+                    "FROM steps WHERE task_id = ANY(%s) "
+                    "ORDER BY task_id, step_index",
+                    (task_ids,),
+                )
+                step_rows = cur.fetchall()
+                cur.execute(
+                    "SELECT task_id, step_index, success, reported_at, "
+                    "worker_id, error_message, channel "
+                    "FROM step_logs WHERE task_id = ANY(%s)",
+                    (task_ids,),
+                )
+                log_rows = cur.fetchall()
 
     # 日志按 (task_id, step_index) 索引；每个 step 至多一行（主键保证）
     log_map = {}
@@ -244,6 +247,8 @@ def list_tasks():
         })
 
     resp = jsonify(tasks)
+    # 分页越页提示：总任务数超出一页时为 "true"，前端据此显示醒目横幅
+    resp.headers["X-Has-More"] = "true" if has_more else "false"
     # ETag：对最终 JSON payload 计 sha256 摘要（sha1 已不再视为抗碰撞安全，
     # 摘要长度对省带宽目标无实质影响，直接用更稳的 sha256）。
     # 前端轮询携带 If-None-Match，命中即 304 空体，省带宽与前端重渲染

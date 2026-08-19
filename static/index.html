@@ -97,6 +97,14 @@
     background: rgba(255,194,75,.06); font-size: 12px; letter-spacing: .06em;
   }
 
+  /* ---------- 分页越页横幅（X-Has-More=true 时醒目提示） ---------- */
+  #overflow-banner {
+    display: none; margin: 0 0 8px; padding: 8px 14px;
+    border: 1px solid var(--c-running); border-left-width: 4px;
+    color: var(--c-running); background: rgba(255,194,75,.10);
+    font-size: 13px; font-weight: 700; letter-spacing: .04em;
+  }
+
   /* ---------- 结果面板（并发上报回显） ---------- */
   #report-result { display: none; }
   #report-result.show {
@@ -207,6 +215,7 @@
 <div class="stats" id="stats"></div>
 
 <div id="poll-error"></div>
+<div id="overflow-banner"></div>
 <div id="stale-banner"></div>
 <div id="report-result"></div>
 <div id="no-running"></div>
@@ -238,6 +247,7 @@ const $last    = document.getElementById("last-fetch");
 const $result  = document.getElementById("report-result");
 const $noRun   = document.getElementById("no-running");
 const $pollErr = document.getElementById("poll-error");
+const $overflow = document.getElementById("overflow-banner");
 const $stale   = document.getElementById("stale-banner");
 const $interval = document.getElementById("refresh-interval");
 
@@ -427,6 +437,15 @@ async function fetchTasks() {
 
     const etag = res.headers.get("ETag");
     if (etag) lastEtag = etag;
+
+    // X-Has-More：总任务数超出单页上限时醒目横幅提示（N = 本页实际返回条数）
+    if (res.headers.get("X-Has-More") === "true") {
+      $overflow.style.display = "block";
+      $overflow.textContent =
+        `⚠ 任务数超出一页，看板仅显示前 ${parsed.length} 条`;
+    } else {
+      $overflow.style.display = "none";
+    }
 
     // 渲染优化：JSON 摘要（字符串）比对，内容无变化时跳过 innerHTML 重建，
     // reporting Set / 按钮禁用等交互状态自然不受影响。
