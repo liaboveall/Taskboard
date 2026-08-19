@@ -2,7 +2,7 @@
 
 kGroup 笔试题一（全栈方向）：多 worker 任务调度系统的后端 + 极简状态看板。技术栈 Python（Flask + psycopg 3）+ PostgreSQL，并发正确性全部交给数据库的行锁和唯一约束，没有引入任何外部中间件。
 
-**实际耗时**：约 12 小时（git 首末提交 2026-08-18 23:29 → 2026-08-19 11:31，含规划、验证与文档整理；过程见 `git log`）。
+**实际耗时**：约 16 小时（git 首末提交 2026-08-18 23:29 → 2026-08-19 15:31，含规划、开发、验证与文档整理；过程见 `git log`）。
 
 ## 语言与数据库选择
 
@@ -28,7 +28,7 @@ createdb taskboard && copy .env.example .env       # Linux/macOS 用 cp；在 .e
 <details>
 <summary>环境变量表（展开）</summary>
 
-seed 默认非破坏（只在空库播种）；`--reset` 显式清库重建。
+seed 默认非破坏（只在空库播种）；`--reset` 显式清库重建。完整变量清单（含 PORT、TB_TEST_DB、TB_LOG_FILE 等）见 .env.example。
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
@@ -37,6 +37,7 @@ seed 默认非破坏（只在空库播种）；`--reset` 显式清库重建。
 | `API_TOKEN` | 设置后 `/api` 全部要求 Bearer 认证 | 未设（默认仅监听本机） |
 | `API_HOST` | API 监听地址 | 127.0.0.1 |
 | `TB_WSGI_THREADS` | waitress 线程数 | 8 |
+| `TB_POOL_MIN` / `TB_POOL_MAX` | API 连接池保底/上限 | 1 / 8 |
 | `TB_CONNECT_TIMEOUT` / `TB_LOCK_TIMEOUT_MS` / `TB_STATEMENT_TIMEOUT_MS` | 连接 / 锁 / 语句超时 | 见 board/db.py |
 | `TB_STRICT_DB` | =1 时测试隔离库不可用直接报错而非 skip | 关 |
 | `WATCHDOG_PYTHON` | watchdog 拉起子进程用的解释器 | .venv 内 python |
@@ -94,7 +95,7 @@ stateDiagram-v2
 ## 发现的边界情况
 
 - `""` 哨兵只认精确空字符串，0 / False / None 都是正常值照常覆盖；`""` 作用于从未定义的 key 时，该 key 保持不存在。
-- L2 的 `""` 是字面值、L3 的 `""` 是哨兵，两层语义刻意不对称（题目原文如此），有测试锁定。
+- L2 的 `""` 是字面值、L3 的 `""` 是哨兵，两层语义刻意不对称，有测试锁定。
 - 嵌套 dict override 整体替换、不做深合并——刻意取舍，同样有测试锁定。
 - step_index 允许不连续（1/3/7 也合法），上报与推进都按真实序号走。
 - 手动上报会和 reaper 回收竞态：report 端点的状态读加 `FOR UPDATE`，行锁保持到日志落库提交，与回收互斥。
@@ -102,7 +103,6 @@ stateDiagram-v2
 
 ## 砍掉了什么、为什么
 
-- **连接池**：≤5 TPS 每请求建连绰绰有余，池的配置项和超时语义反而是负担。
 - **回收后断点续跑**：回收任务整体重跑，已完成 step 被幂等主键自动挡下；真续跑要持久化 step 级游标，复杂度与收益不成比例。
 - **WebSocket**：这个数据量下 2 秒轮询和推送没有体验差别。
 - **嵌套参数深合并、迁移框架**：与规模不匹配；整体替换 + schema.sql 幂等重建够用。（鉴权未砍，以 opt-in `API_TOKEN` 形式提供。）

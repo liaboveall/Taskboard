@@ -24,7 +24,7 @@ ERROR_MESSAGE_MAX_LEN = 500
 # 围栏谓词单点收敛（评审修复）：围栏分支的 WHERE 尾巴与 worker 心跳/
 # 持有者探针复用 claim._fence_where 同一构造器（active_status=True 的
 # logs 存量语序：status 紧跟 claimed_by，逐字等价于存量 SQL）。
-from board.claim import _fence_where  # noqa: E402（claim 不反向依赖 logs，无环）
+from board.claim import _fence_where  # noqa: E402  # claim 不反向依赖 logs，无环
 
 
 def report_step(conn, task_id, step_index, success, worker_id, owner=None, error_message=None, owner_epoch=None,

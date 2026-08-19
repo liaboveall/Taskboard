@@ -51,8 +51,11 @@ jobs:
         # 显式 -m "" 覆盖 pyproject addopts 的 `-m "not slow"`：
         # pytest 的 -m 命令行优先于 addopts，全量含 slow 用例。
         # 产物落 artifacts/ 目录供下方 upload-artifact 归档（junit xml /
-        # coverage xml / pytest 终端输出 tee 捕获）
+        # coverage xml / pytest 终端输出 tee 捕获）。
+        # set -o pipefail 必加：否则管道退出码取自 tee，pytest 失败会被
+        # 吞掉、CI 假绿——这与 conftest 的 TB_STRICT_DB 假绿防护同口径。
         run: |
+          set -o pipefail
           mkdir -p artifacts
           pytest -m "" --cov=board --cov-report=term-missing \
             --cov-report=xml:artifacts/coverage.xml \

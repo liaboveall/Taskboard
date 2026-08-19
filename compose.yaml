@@ -7,7 +7,7 @@
 # 绝不挂载/依赖宿主机 .env —— 宿主机 .env 指向本机 PG 17，与容器 PG 互不干扰。
 # postgres 刻意不开 ports 映射：只在 compose 内网暴露，避免与宿主机 PG 争端口。
 # watchdog 不进容器：它是裸机部署形态的进程守护，容器形态的生命周期管理
-# 由下方 restart 策略承担（边界说明见 README「部署形态取舍」）。
+# 由下方 restart 策略承担（边界说明见 docs/operations.md「两种部署形态怎么选」）。
 
 name: taskboard
 

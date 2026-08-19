@@ -654,7 +654,7 @@ if __name__ == "__main__":
     # 监听地址可经 API_HOST 环境变量覆盖（默认 127.0.0.1，裸机信任边界不变）：
     # 容器部署时 compose 注入 API_HOST=0.0.0.0 —— 容器内绑 127.0.0.1 会让
     # 宿主机端口映射无法触达服务，这是容器化的硬前提；对外暴露的安全收口
-    # 由 API_TOKEN + 反代负责（见 README「信任边界」）。
+    # 由 API_TOKEN + 反代负责（见 docs/operations.md「信任边界」）。
     host = os.environ.get("API_HOST", "127.0.0.1")
     port = db.env_int("PORT", 5000)
     try:
