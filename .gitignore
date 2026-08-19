@@ -14,6 +14,10 @@ artifacts/
 # Local secrets (use .env.example as template)
 .env
 
+# 评审临时文件（防复发：评审期产生的 diff/旧版对照文件不入库）
+.review_*.txt
+review_diff.txt
+
 # evidence/ 是运行时证据目录（attack_claim 攻击日志、watchdog 重启日志、
 # e2e 取证截图等均由运行期产生），默认不入库；覆盖 .log 与 .png 两类产物，
 # _ 前缀临时取证文件一并排除。

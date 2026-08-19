@@ -13,14 +13,18 @@
 |---|---|---|
 | 攻击脚本用 `GROUP BY id HAVING count(*)>1` 查重判重复认领 | 审阅时推演即发现破绽：tasks.id 是主键，库里结构性不可能出现重复 id 行，该查询恒返回零行——是死检查，永远“通过”、什么都没验证 | 改判据：同一任务被两个 worker 认领只可能表现为队列回传重复 id，故以队列去重 + DB 计数双向核对为准（scripts/attack_claim.py:13-15 注释存证） |
 | 幂等上报用常见写法 `INSERT ... ON CONFLICT DO NOTHING RETURNING (xmax = 0)` 区分首写/重复 | 对照 PostgreSQL 语义验证：xmax 表达式是给 DO UPDATE 用的；DO NOTHING 冲突时根本不返回行，表达式永远求值不到，属死代码 | 改为直接 `RETURNING 1`：fetchone() 得 None 即重复上报的唯一信号（board/logs.py:16-19 注释存证） |
-| test_seed 用例假设 seed 播种可直接叠加在 fixture 连接的事务之上 | 真库复现：fixture 连接断言后留在未提交事务中，持 tasks 表 ACCESS SHARE 锁，seed DDL 需 ACCESS EXCLUSIVE，撞 lock_timeout=5000ms 确定性报 LockNotAvailable（QA 真库定位） | 测试侧事务卫生修复：seed.main() 前先 commit 关闭 fixture 隐式事务释放锁，不改生产代码（commit c397357，全量 122 复绿） |
+| test_seed 用例假设 seed 播种可直接叠加在 fixture 连接的事务之上 | 真库复现：fixture 连接断言后留在未提交事务中，持 tasks 表 ACCESS SHARE 锁，seed DDL 需 ACCESS EXCLUSIVE，撞 lock_timeout=5000ms 确定性报 LockNotAvailable（QA 真库定位） | 测试侧事务卫生修复：seed.main() 前先 commit 关闭 fixture 隐式事务释放锁，不改生产代码（commit c397357，默认集 122 复绿） |
 | compose 的 seed 服务用 --force 每次 up 重建清库 | 评审发现：演示口径被破坏——注入的批量任务与看板进度每次重启归零，与“非破坏缺省”的项目纪律矛盾 | 改为缺省非破坏（仅空库播种），破坏性重建显式 --reset（commit 45654f0） |
 
 共同点：四条都不是靠 AI 自我反思发现，而是靠推演、真库实测、QA 复现与评审等**外部验证**发现；裁决一律以测试与攻击脚本实测为准。
 
 ## 验证方式（不依赖 AI 口头保证）
 1. `pytest tests -v`（真库实测）：**122 个用例全绿**（逐文件拆分：test_api 40 / test_params 30 / test_recovery 23 / test_db 7 / test_blindspots 5 / test_idempotent_log 5 / test_worker_fail 5 / test_seed 3 / test_watchdog 3 / test_stepidx 1）。口径说明：默认 addopts `-m "not slow"` 排除分钟级攻击用例；`pytest -m ""` 全量 123 个（含 test_attack_claim 的 slow 攻击用例）；CI 为全量口径。无数据库环境下 DB 用例自动 skip。
-2. `scripts/attack_claim.py`：multiprocessing spawn 真实多进程攻击，10 进程 × 10 轮 × 100 任务，判定 = 队列回传 id 去重 + DB 侧计数核对 + 参与度核对（distinct claimed_by ≥ 2），duplicate_claims=0（攻击日志已归档）。
+2. `scripts/attack_claim.py`：multiprocessing spawn 真实多进程攻击，10 进程 × 10 轮 × 100 任务，判定 = 队列回传 id 去重 + DB 侧计数核对 + 参与度核对（distinct claimed_by ≥ 2）。看日志尾部两行：汇总行 `duplicate_claims=0`、末行 `result=PASS`（攻击日志已归档）。
+   全量口径还含两轮深度验证（README 只留结果表，细节下沉于此）：
+   - **claim×reaper 组合轮**：回收后重认领 epoch 严格递增、旧代围栏 transition 全部 rowcount=0；
+   - **report_step 洪泛轮 ×3**：每 (task, step) 恰一行、首报归属正确、旧代围栏 0 写入。
+   CI 侧由 `tests/test_attack_claim.py` subprocess 复用同一脚本。
 3. 看板 E2E（新口径）：并发 5 次上报由前端 5 个并行 POST 承担，服务端每 POST 只执行 1 次真实上报、单 POST 响应 received=1；看板面板为 5 POST 聚合（received=5 / inserted=0 / duplicates_ignored=5，worker 先报、5 POST 全被去重）。
 4. 双 worker 并行运行，批量认领交错分摊。
 
@@ -37,7 +41,7 @@
 
 ### 验证方式
 1. **pytest 全绿**（本机有 PostgreSQL，无 skip）：默认 addopts 口径 122 个用例；`-m ""` 全量口径 123 个（含 slow 攻击用例），逐文件拆分见本节首条。
-2. **攻击测试**：攻击测试末行 `result=PASS, duplicate_claims=0`；test_stepidx.py 非连续 step_index 1/3/7 口径已入 pytest。
+2. **攻击测试**：看攻击日志尾部两行（汇总行 duplicate_claims=0 / 末行 result=PASS）；test_stepidx.py 非连续 step_index 1/3/7 口径已入 pytest。
 3. **reaper 实杀演示**：LEASE_SECONDS=15 下 W1 执行任务 2 时被强杀，W2 打印 `reclaimed expired tasks: [2]` 后重新认领并跑到 done。
 4. **浏览器 E2E 正反例**：正例：5 POST 聚合 received=5/inserted=0/duplicates_ignored=5；反例：竞速失败 5/5 POST 返回 409，红色错误面板如实渲染（H3 修复验证）。
 

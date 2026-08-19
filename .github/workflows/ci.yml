@@ -59,8 +59,11 @@ jobs:
             --junitxml=artifacts/junit.xml 2>&1 | tee artifacts/pytest_output.txt
 
       - name: Upload test evidence
-        # 无论成败均归档测试证据（pytest 输出 / junit.xml / coverage.xml），保留 30 天
+        # 无论成败均归档测试证据（pytest 输出 / junit.xml / coverage.xml），保留 30 天。
+        # 归档失败不影响测试结论：continue-on-error 隔离 artifact 步骤，
+        # 避免上传故障把已跑完的测试结果反转为红。
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: test-evidence

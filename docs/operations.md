@@ -1,6 +1,6 @@
 # 运维与契约细则（自 README 下沉）
 
-README 保持一页速览，本页承载四块中等深度内容：部署形态取舍、信任边界细则、API 契约变更声明、Docker 详细命令与数据生命周期。
+README 保持一页速览，本页承载五块中等深度内容：部署形态取舍、信任边界细则、API 契约变更声明、Docker 详细命令与数据生命周期、目录约定。
 
 ## 部署
 
@@ -48,3 +48,6 @@ docker compose up --build          # postgres healthy → seed 播种 → api he
   environment 注入 `API_TOKEN` 即可（口径见上方「信任边界细则」）。
 - **Dev Container**：`.devcontainer/` 复用同一 compose 栈（主 compose + extend 覆盖层），
   VS Code "Reopen in Container" 即得 postgres/seed/api/worker 全套环境与源码挂载。
+
+## 目录约定
+- 演示/取证脚本归位 `scripts/`（attack_claim / reaper_demo / seed_demo_bulk / e2e_prep），`tests/` 只留 pytest 用例与 conftest，两者职责不混居。

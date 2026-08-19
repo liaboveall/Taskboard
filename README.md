@@ -7,7 +7,6 @@ Python（Flask + psycopg 3）+ PostgreSQL：三层参数合并、并发认领、
 - 默认集 122 用例（排除 slow）/ 全量 123（含攻击测试），真库全绿
 - 幂等 first-report-wins：主键 + `ON CONFLICT DO NOTHING`，结构性保证、无应用层判断
 - Docker 一键：`docker compose up --build` 即得 postgres/seed/api/worker 全套
-- CI 全量含 slow 攻击用例 + coverage，产物归档 artifact 可追溯
 
 **实际耗时：约 12 小时**（口径：git 首末提交自然跨度 2026-08-18 23:29 → 2026-08-19 11:31，含规划/验证/答辩准备；纯编码时段见 `git log`）
 
@@ -57,6 +56,9 @@ stateDiagram-v2
     claimed --> running : worker 开始执行
     running --> done : 全部 step 成功
     running --> failed : 重试耗尽（error_message 落库）
+    claimed --> failed : 起步即失败兜底（未及 running 就异常）
+    claimed --> failed : 重试上限死信（reaper 回收不再重排）
+    running --> failed : 重试上限死信（reaper 回收不再重排）
     claimed --> pending : claimed→running 失败，release 归还
     claimed --> pending : 租约超期，reaper 回收
     running --> pending : 租约超期，reaper 回收
@@ -75,23 +77,18 @@ stateDiagram-v2
 | 4 | {} | 同上 |
 
 ## 并发证据（实测，非口头保证）
-`scripts/attack_claim.py`：spawn 10 个独立进程、子进程内独立数据库连接（非线程/协程伪并发），Barrier 对齐起跑；判定 = 队列回传 id 去重 + DB 计数双向核对 + 多 worker 参与度核对（distinct claimed_by ≥ 2）。
+`scripts/attack_claim.py` spawn 10 真进程攻击：判定 = 队列回传 id 去重 + DB 计数双向核对 + 参与度核对；全量口径另含组合轮/洪泛轮深验，细节见 [COLLAB.md](COLLAB.md)。
 
 | workers | rounds | tasks | duplicate_claims | 结果 | 日志 |
 |---|---|---|---|---|---|
 | 10 | 10 | 1000 | **0** | PASS | [evidence/claim_attack_run.log](evidence/claim_attack_run.log) |
 
-全量口径还含：claim×reaper 组合轮（回收后重认领 epoch 严格递增、旧代围栏 transition 全部 rowcount=0）与 report_step 洪泛轮 ×3（每 (task, step) 恰一行、首报归属正确、旧代围栏 0 写入）。CI 侧由 `tests/test_attack_claim.py` subprocess 复用同一脚本。
-
 ## 自己发现的边界情况
-- L3 `""` 保留当前粘性值，不回跳 base/L2；L2 `""` 是字面值。
-- `""` 作用于从未定义的 key → key 保持不存在。
-- 假值（0/False/None）不是哨兵，仅精确 `""` 触发跳过。
-- 嵌套 dict override 整体替换、非深合并（刻意取舍，有测试锁定）。
-- step_index 可不连续，按真实序号上报。
+- `""` 哨兵：仅精确 `""`（假值 0/False/None 不是）；L3 `""` 保留当前粘性值不回跳，L2 `""` 是字面值；作用于未定义 key 则 key 保持不存在。
+- 嵌套 dict override 整体替换、非深合并（刻意取舍，有测试锁定）；step_index 可不连续，按真实序号上报。
 
 ## 测试与验证
-- 本地默认 `pytest`：默认集 122（排除 slow）；`pytest -m ""` 全量 123（含攻击测试）。无 PostgreSQL 时 DB 用例自动 skip 并打印"假绿警告"。
+- 本地默认 `pytest`：默认集 122（排除 slow）；`pytest -m ""` 全量 123（含攻击测试）。无 PostgreSQL 时 DB 用例自动 skip 并打印"假绿警告"。覆盖率不设 fail-under，待 CI 基线实测后回填。
 - CI：GitHub Actions postgres:14 service + `TB_STRICT_DB=1` 全量跑，pytest 输出/junit/coverage 归档 artifact（保留 30 天）。
 - 看板 E2E：并发 5 次上报全去重、竞速失败如实渲染。更多见 [COLLAB.md](COLLAB.md)。
 
@@ -99,5 +96,5 @@ stateDiagram-v2
 连接池、回收后断点续跑、嵌套深合并、WebSocket、迁移框架——均为与本规模不匹配或刻意取舍，逐项理由见 COLLAB.md。（鉴权已以 opt-in `API_TOKEN` 形式补齐。）
 
 ## 细则索引（README 保持一页，深度内容下沉）
-- 部署形态取舍 / 信任边界细则 / API 契约变更声明 / Docker 详命令与数据生命周期 → [docs/operations.md](docs/operations.md)
+- 部署形态取舍 / 信任边界细则 / API 契约变更声明 / Docker 详命令与数据生命周期 / 目录约定 → [docs/operations.md](docs/operations.md)
 - 验证细节 / 历轮修复清单 / AI 纠错案例 → [COLLAB.md](COLLAB.md)
