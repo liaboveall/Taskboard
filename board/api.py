@@ -353,7 +353,9 @@ def report(tid, seq):
                 )
                 task_row = cur.fetchone()
                 if task_row is None:
-                    return reject({"error": f"task {tid} not found",
+                    # 信息收敛：不回显具体 tid 的存在性（探测枚举防护），
+                    # 调用方靠机器可读的 error_code 区分语义
+                    return reject({"error": "requested task or step does not exist",
                                    "error_code": "task_not_found"},
                                   404, "task_not_found")
                 task_status, claimed_by, current_step, claim_epoch = task_row
@@ -361,7 +363,8 @@ def report(tid, seq):
                     "SELECT 1 FROM steps WHERE task_id=%s AND step_index=%s", (tid, seq)
                 )
                 if cur.fetchone() is None:
-                    return reject({"error": f"step {seq} of task {tid} not found",
+                    # 同 task_not_found 口径：统一模糊文案，不回显 tid/seq 存在性
+                    return reject({"error": "requested task or step does not exist",
                                    "error_code": "step_not_found"},
                                   404, "step_not_found")
 

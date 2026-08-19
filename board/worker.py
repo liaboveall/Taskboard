@@ -222,6 +222,8 @@ def _safe_rollback(conn):
         conn.rollback()
         return True
     except Exception:
+        # 吞异常但留痕：连接断开细节只进 DEBUG，不改变“返回 False”控制流
+        logger.debug("rollback failed (connection likely broken)", exc_info=True)
         return False
 
 
@@ -248,6 +250,10 @@ def _still_owner(conn, task_id, worker_id, claim_epoch=None):
         conn.rollback()  # 纯读探针：回滚释放快照，不留事务痕迹
         return still
     except Exception:
+        # 探针自身异常按失权处理（见函数 docstring）；异常现场补 DEBUG 留痕，
+        # 排查“为什么被误判失权”时可见真实原因
+        logger.debug("ownership probe failed for task %s (treating as fenced)",
+                     task_id, exc_info=True)
         _safe_rollback(conn)
         return False
 
@@ -287,6 +293,10 @@ def _mark_failed(conn, task_id, worker_id, step_idx, reason, claim_epoch=None, d
                 logger.warning("failure log not written: task=%s step=%s worker=%s reason=fenced",
                                task_id, step_idx, worker_id)
         except Exception:
+            # 失败日志写库异常：控制流不变（先兜底回滚再决定是否放弃），
+            # 补 DEBUG 留痕，避免“失败上报为什么没写进去”无痕可查
+            logger.debug("failure log report failed for task %s step %s",
+                         task_id, step_idx, exc_info=True)
             if not _safe_rollback(conn):
                 return False
     try:
@@ -302,6 +312,8 @@ def _mark_failed(conn, task_id, worker_id, step_idx, reason, claim_epoch=None, d
             logger.warning("[%s] task %s: task left 'claimed/running' "
                            "by another path (likely reclaimed)", worker_id, task_id)
     except Exception:
+        # 状态翻转异常：同样不改控制流，补 DEBUG 留痕后走兜底回滚判定
+        logger.debug("failed transition error for task %s", task_id, exc_info=True)
         if not _safe_rollback(conn):
             return False
     step_label = step_idx if step_idx is not None else "-"

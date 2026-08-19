@@ -120,7 +120,8 @@ def main():
                 try:
                     p.terminate()
                 except OSError:
-                    pass
+                    # 吞异常保停机流程不中断；补 DEBUG 留痕（句柄失效等细节可查）
+                    logger.debug("terminate failed for job %s", JOB_NAMES[i], exc_info=True)
         for i, st in enumerate(state):
             p = st["proc"]
             if p is not None and p.poll() is None:
@@ -132,7 +133,9 @@ def main():
                         p.kill()
                         p.wait(timeout=5)
                     except Exception:
-                        pass
+                        # 强杀/等待失败不阻断其余子进程收尾；补 DEBUG 留痕
+                        logger.debug("kill/wait failed for job %s", JOB_NAMES[i],
+                                     exc_info=True)
             st["proc"] = None
 
     while True:
